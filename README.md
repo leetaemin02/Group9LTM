@@ -17,7 +17,7 @@ Thông qua đề tài, nhóm tìm hiểu nguyên lý hoạt động, kiến trú
 | --- | -------------------- | -------------- | -------------- |
 | 1   | **Dương Đình Thuận** | **2331540247** | 👑 Nhóm trưởng |
 | 2   | **Nguyễn Thế Minh**  | **2331540226** | Thành viên     |
-
+   
 ---
 
 ## 🎯 Mục tiêu đề tài
