@@ -1,4 +1,4 @@
-# WebSocket – Nhóm 9
+# Đề tài: Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket
 
 ## 📌 Thông tin đề tài
 
