@@ -3,7 +3,7 @@
 ## 📌 Thông tin đề tài
 
 **Chủ đề:** Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket
-**Nhóm:** Nhóm 9
+**Nhóm:** 9
 
 Repository này được xây dựng nhằm tìm hiểu và thực hành **WebSocket**, một công nghệ hỗ trợ giao tiếp hai chiều (Two-way Communication) theo thời gian thực giữa **Client** và **Server** thông qua một kết nối TCP duy trì liên tục.
 
@@ -13,11 +13,11 @@ Thông qua đề tài, nhóm tìm hiểu nguyên lý hoạt động, kiến trú
 
 ## 👥 Thành viên nhóm
 
-| STT | Họ và tên                | MSSV           | Vai trò        |
-| --- | ------------------------ | -------------- | -------------- |
-| 1   | **Dương Đình Thuận**     | **2331540247** | 👑 Nhóm trưởng |
-| 2   | **Nguyễn Thế Minh**      | **2331540226** | Thành viên     |
-| 3   | **Huỳnh Thị Thanh Thảo** | **2431540240** | Thành viên     |
+| STT | Họ và tên                | MSSV           | Vai trò     |
+| --- | ------------------------ | -------------- | ------------|
+| 1   | **Dương Đình Thuận**     | **2331540247** | Nhóm trưởng |
+| 2   | **Nguyễn Thế Minh**      | **2331540226** | Thành viên  |
+| 3   | **Huỳnh Thị Thanh Thảo** | **2431540240** | Thành viên  |
 
 ---
 
