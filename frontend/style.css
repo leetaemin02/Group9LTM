@@ -1364,7 +1364,7 @@ textarea:focus {
   line-height: 1.5;
 }
 
-/* ─── Minigame Cờ Caro Rộng Rãi (10x10 / 8x8 / 3x3) ─────────────────── */
+/* ─── Minigame Cờ Caro Rộng Rãi (10x10 / 15x15 / 20x20) ─────────────────── */
 .game-panel {
   background: var(--bg-card-solid);
   border: 1px solid var(--border-subtle);
@@ -1495,30 +1495,28 @@ textarea:focus {
   border-radius: 4px;
 }
 
-/* Bàn cờ 8x8 */
-.tictactoe-board.size-8 {
-  grid-template-columns: repeat(8, 40px);
-  gap: 3px;
+.tictactoe-board.size-15 {
+  grid-template-columns: repeat(15, 30px);
+  gap: 2px;
 }
 
-.tictactoe-board.size-8 .cell {
-  width: 40px;
-  height: 40px;
-  font-size: 1.45rem;
-  border-radius: 6px;
+.tictactoe-board.size-15 .cell {
+  width: 30px;
+  height: 30px;
+  font-size: 1.1rem;
+  border-radius: 4px;
 }
 
-/* Bàn cờ 3x3 nhanh */
-.tictactoe-board.size-3 {
-  grid-template-columns: repeat(3, 68px);
-  gap: 8px;
+.tictactoe-board.size-20 {
+  grid-template-columns: repeat(20, 28px);
+  gap: 2px;
 }
 
-.tictactoe-board.size-3 .cell {
-  width: 68px;
-  height: 68px;
-  font-size: 2.1rem;
-  border-radius: var(--radius-sm);
+.tictactoe-board.size-20 .cell {
+  width: 28px;
+  height: 28px;
+  font-size: 1rem;
+  border-radius: 3px;
 }
 
 .cell {
@@ -2268,15 +2266,37 @@ textarea:focus {
     padding: 8px 12px 10px;
   }
 
-  .tictactoe-board {
-    grid-template-columns: repeat(3, 58px);
-    gap: 6px;
+  .tictactoe-board.size-10 {
+    grid-template-columns: repeat(10, 28px);
+    gap: 2px;
   }
 
-  .cell {
-    width: 58px;
-    height: 58px;
-    font-size: 1.6rem;
+  .tictactoe-board.size-10 .cell {
+    width: 28px;
+    height: 28px;
+    font-size: 1rem;
+  }
+
+  .tictactoe-board.size-15 {
+    grid-template-columns: repeat(15, 26px);
+    gap: 2px;
+  }
+
+  .tictactoe-board.size-15 .cell {
+    width: 26px;
+    height: 26px;
+    font-size: 0.9rem;
+  }
+
+  .tictactoe-board.size-20 {
+    grid-template-columns: repeat(20, 23px);
+    gap: 2px;
+  }
+
+  .tictactoe-board.size-20 .cell {
+    width: 23px;
+    height: 23px;
+    font-size: 0.8rem;
   }
 }
 

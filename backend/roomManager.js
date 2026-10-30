@@ -11,6 +11,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const GAME_SIZES = [10, 15, 20];
 
 class RoomManager {
   constructor() {
@@ -169,14 +170,14 @@ class RoomManager {
    * @param {string} roomId
    * @param {string} inviterId
    * @param {string} partnerId
-   * @param {number} [size=3] - Kích thước cạnh bàn cờ: 3, 8 hoặc 10 (mặc định 3 để tương thích test)
+   * @param {number} [size=10] - Kích thước cạnh bàn cờ: 10, 15 hoặc 20
    */
-  initGame(roomId, inviterId, partnerId, size = 3) {
+  initGame(roomId, inviterId, partnerId, size = 10) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
-    const boardSize = [3, 8, 10].includes(size) ? size : (size || 3);
-    const winLength = boardSize >= 10 ? 5 : (boardSize >= 7 ? 4 : 3);
+    const boardSize = GAME_SIZES.includes(size) ? size : 10;
+    const winLength = 5;
 
     room.game = {
       type: 'caro',
@@ -208,8 +209,8 @@ class RoomManager {
     if (!room || !room.game) return { ok: false, error: 'Chưa có ván game nào đang diễn ra' };
 
     const game = room.game;
-    const size = game.size || 3;
-    const winLength = game.winLength || 3;
+    const size = game.size || 10;
+    const winLength = game.winLength || 5;
 
     if (game.status !== 'playing') return { ok: false, error: 'Ván cờ đã kết thúc' };
     if (game.turn !== clientId) return { ok: false, error: 'Chưa đến lượt của bạn' };
@@ -304,8 +305,8 @@ class RoomManager {
     // Đảo lượt đánh trước cho ván sau
     const oldX = room.game.xPlayer;
     const oldO = room.game.oPlayer;
-    const size = newSize || room.game.size || 3;
-    const winLength = size >= 10 ? 5 : (size >= 7 ? 4 : 3);
+    const size = GAME_SIZES.includes(newSize) ? newSize : (room.game.size || 10);
+    const winLength = 5;
 
     room.game = {
       type: 'caro',

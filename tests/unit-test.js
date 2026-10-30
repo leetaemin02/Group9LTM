@@ -268,13 +268,15 @@ assert.ok(skipBlocked.remainingSec > 0);
 
 console.log('✅ moderation ban & anti-skip passed');
 
-console.log('--- 8. Testing roomManager.js Minigame (Tic-Tac-Toe 3x3) ---');
+console.log('--- 8. Testing roomManager.js Minigame (Caro 10x10+) ---');
 const gameRoomMgr = new RoomManager();
 const gRoomId = gameRoomMgr.createRoom('player-X', 'player-O');
 
 // Init game
-const initialGame = gameRoomMgr.initGame(gRoomId, 'player-X', 'player-O');
+const initialGame = gameRoomMgr.initGame(gRoomId, 'player-X', 'player-O', 10);
 assert.strictEqual(initialGame.status, 'playing');
+assert.strictEqual(initialGame.size, 10);
+assert.strictEqual(initialGame.winLength, 5);
 assert.strictEqual(initialGame.xPlayer, 'player-X');
 assert.strictEqual(initialGame.oPlayer, 'player-O');
 assert.strictEqual(initialGame.turn, 'player-X');
@@ -290,27 +292,33 @@ const errMove = gameRoomMgr.makeGameMove(gRoomId, 'player-X', 1);
 assert.strictEqual(errMove.ok, false);
 assert.ok(errMove.error);
 
-// Move 2: player-O -> cell 3
-const res2 = gameRoomMgr.makeGameMove(gRoomId, 'player-O', 3);
+// Move 2: player-O -> cell 10
+const res2 = gameRoomMgr.makeGameMove(gRoomId, 'player-O', 10);
 assert.strictEqual(res2.ok, true);
-assert.strictEqual(res2.game.board[3], 'O');
+assert.strictEqual(res2.game.board[10], 'O');
 assert.strictEqual(res2.game.turn, 'player-X');
 
-// Move 3: player-X -> cell 1
+// Complete a five-in-a-row while player-O makes non-blocking moves.
 gameRoomMgr.makeGameMove(gRoomId, 'player-X', 1);
-// Move 4: player-O -> cell 4
-gameRoomMgr.makeGameMove(gRoomId, 'player-O', 4);
-// Move 5: player-X -> cell 2 (Winning line 0, 1, 2)
-const winRes = gameRoomMgr.makeGameMove(gRoomId, 'player-X', 2);
+gameRoomMgr.makeGameMove(gRoomId, 'player-O', 11);
+gameRoomMgr.makeGameMove(gRoomId, 'player-X', 2);
+gameRoomMgr.makeGameMove(gRoomId, 'player-O', 12);
+gameRoomMgr.makeGameMove(gRoomId, 'player-X', 3);
+gameRoomMgr.makeGameMove(gRoomId, 'player-O', 13);
+const winRes = gameRoomMgr.makeGameMove(gRoomId, 'player-X', 4);
 assert.strictEqual(winRes.ok, true);
 assert.strictEqual(winRes.game.status, 'ended');
 assert.strictEqual(winRes.game.winner, 'X');
-assert.deepStrictEqual(winRes.game.winningLine, [0, 1, 2]);
+assert.deepStrictEqual(winRes.game.winningLine, [0, 1, 2, 3, 4]);
 
 // Reset game
 const resetGame = gameRoomMgr.resetGame(gRoomId);
 assert.strictEqual(resetGame.status, 'playing');
 assert.strictEqual(resetGame.board.every((c) => c === null), true);
+const largerResetGame = gameRoomMgr.resetGame(gRoomId, 20);
+assert.strictEqual(largerResetGame.size, 20);
+assert.strictEqual(largerResetGame.winLength, 5);
+assert.strictEqual(largerResetGame.board.length, 400);
 
 console.log('✅ roomManager.js Minigame passed');
 
@@ -455,32 +463,28 @@ assert.strictEqual(partnerInfo.isBot, true, 'Partner must have isBot = true');
 assert.ok(partnerInfo.nickname.includes('Lumi'));
 assert.strictEqual(typeof partnerInfo.mood, 'string');
 
-// Test AI Move: Thắng ngay
-// Board: X O null | O O null | X null null
-// Bot cầm 'O' có ô 3, 4 -> nước thắng là ô 5
-const winBoard = [
-  'X', 'O', null,
-  'O', 'O', null,
-  'X', null, null
-];
+// Test AI Move: thắng ngay với bốn quân liên tiếp trên bàn 15x15.
+const winBoard = Array(225).fill(null);
+winBoard[0] = 'O';
+winBoard[1] = 'O';
+winBoard[2] = 'O';
+winBoard[3] = 'O';
 const winMove = bot.computeMove(winBoard, 'O', 'X');
-assert.strictEqual(winMove, 5, 'Bot must choose winning move at index 5');
+assert.strictEqual(winMove, 4, 'Bot must complete five in a row');
 
-// Test AI Move: Chặn người chơi thắng
-// Board: X X null | O null null | null null null
-// Người chơi cầm 'X' có ô 0, 1 -> Bot 'O' phải chặn ô 2
-const blockBoard = [
-  'X', 'X', null,
-  'O', null, null,
-  null, null, null
-];
+// Test AI Move: chặn người chơi khi họ có bốn quân liên tiếp.
+const blockBoard = Array(225).fill(null);
+blockBoard[0] = 'X';
+blockBoard[1] = 'X';
+blockBoard[2] = 'X';
+blockBoard[3] = 'X';
 const blockMove = bot.computeMove(blockBoard, 'O', 'X');
-assert.strictEqual(blockMove, 2, 'Bot must block player at index 2');
+assert.strictEqual(blockMove, 4, 'Bot must block player at index 4');
 
-// Test AI Move: Chiếm ô trung tâm
-const emptyBoard = Array(9).fill(null);
+// Test AI Move: chiếm ô trung tâm bàn cờ 15x15.
+const emptyBoard = Array(225).fill(null);
 const centerMove = bot.computeMove(emptyBoard, 'O', 'X');
-assert.strictEqual(centerMove, 4, 'Bot must prioritize center cell 4 on empty board');
+assert.strictEqual(centerMove, 112, 'Bot must prioritize the center cell on empty board');
 
 // Test RoomManager integration with Bot
 const soloRoomMgr = new RoomManager();
@@ -496,13 +500,16 @@ bot.destroy();
 
 console.log('✅ companionBot.js & Solo Room passed');
 
-console.log('--- 12. Testing Caro 10x10 Move Validation & Same Device Dev Mode ---');
-// Test GAME_MOVE validation up to 99
+console.log('--- 12. Testing Caro 20x20 Move Validation & Same Device Dev Mode ---');
+// Test GAME_MOVE validation up to 399
 assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 0 }).ok, true);
 assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 55 }).ok, true, 'Index 55 on 10x10 board must be valid');
-assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 99 }).ok, true, 'Index 99 on 10x10 board must be valid');
-assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 100 }).ok, false, 'Index >= 100 must be invalid');
+assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 399 }).ok, true, 'Index 399 on 20x20 board must be valid');
+assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: 400 }).ok, false, 'Index >= 400 must be invalid');
 assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_MOVE, { index: -1 }).ok, false, 'Negative index must be invalid');
+assert.deepStrictEqual(validatePayload(CLIENT_TYPES.GAME_INVITE, { size: 15 }).sanitized, { size: 15 });
+assert.deepStrictEqual(validatePayload(CLIENT_TYPES.GAME_ACCEPT, { size: 20 }).sanitized, { size: 20 });
+assert.strictEqual(validatePayload(CLIENT_TYPES.GAME_RESET, { size: 8 }).ok, false, 'Boards smaller than 10x10 must not be supported');
 
 // Test Same-Device matching in dev mode
 const devMod = new Moderation();
@@ -512,7 +519,7 @@ assert.strictEqual(
   'In dev mode, different clients with same deviceId must be allowed to match for easy local testing'
 );
 
-console.log('✅ Caro 10x10 & Dev Mode tests passed');
+console.log('✅ Caro 20x20 & Dev Mode tests passed');
 
 (async () => {
   console.log('--- Testing Azure Blob attachment validation and upload tickets ---');

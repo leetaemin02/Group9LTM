@@ -855,7 +855,7 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
-    const requestedSize = (payload && [3, 8, 10].includes(payload.size)) ? payload.size : 10;
+    const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
 
     // Nếu là phòng Bot -> Bot tự động chấp nhận ngay lập tức!
     if (roomManager.isBotRoom(clientId)) {
@@ -890,7 +890,7 @@ const messageHandlers = {
     const partnerId = roomManager.getPartnerId(clientId);
     if (!roomId || !partnerId) return;
 
-    const requestedSize = (payload && [3, 8, 10].includes(payload.size)) ? payload.size : 10;
+    const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
     const game = roomManager.initGame(roomId, partnerId, clientId, requestedSize);
     const msg = serverMsg.gameState({
       action: 'start',
@@ -984,7 +984,7 @@ const messageHandlers = {
     const roomId = roomManager.getRoomId(clientId);
     if (!roomId) return;
 
-    const requestedSize = (payload && [3, 8, 10].includes(payload.size)) ? payload.size : null;
+    const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : null;
 
     if (roomManager.isBotRoom(clientId)) {
       const game = roomManager.resetGame(roomId, requestedSize);

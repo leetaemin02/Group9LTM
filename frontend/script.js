@@ -6,7 +6,7 @@
  *   2. Xử lý giao diện người dùng (3 màn hình: Login/Lobby, Waiting, Chat).
  *   3. Gửi/nhận message theo giao thức JSON { type, payload }.
  *   4. Quản lý âm thanh hiệu ứng (Web Audio API).
- *   5. Tạo biệt danh ngẫu nhiên, chọn avatar, gợi ý phá băng, minigame Caro 3x3.
+ *   5. Tạo biệt danh ngẫu nhiên, chọn avatar, gợi ý phá băng, minigame Caro 10x10/15x15/20x20.
  *   6. Escape HTML để chống XSS ở phía client.
  */
 
@@ -111,6 +111,7 @@ const el = {
   // Game Invite Modal
   modalGameInvite: $('#modal-game-invite'),
   gameInviterName: $('#game-inviter-name'),
+  gameInviteDescription: $('#game-invite-description'),
   btnGameAccept: $('#btn-game-accept'),
   btnGameDecline: $('#btn-game-decline'),
 
@@ -900,7 +901,7 @@ function handleGameInvite(payload) {
   playMatchSound();
 }
 
-/** Cập nhật bàn cờ Caro (Hỗ trợ 10x10, 8x8, 3x3) */
+/** Cập nhật bàn cờ Caro (Hỗ trợ 10x10, 15x15 và 20x20) */
 function handleGameState(payload) {
   if (!payload) return;
 
@@ -908,6 +909,15 @@ function handleGameState(payload) {
   if (payload.action === 'invite') {
     if (el.modalGameInvite) {
       el.gameInviterName.textContent = payload.fromName || 'Đối phương';
+      selectedGameSize = [10, 15, 20].includes(payload.size) ? payload.size : 10;
+      if (el.gameSizeControls) {
+        el.gameSizeControls.querySelectorAll('.size-btn').forEach(btn => {
+          btn.classList.toggle('active', parseInt(btn.dataset.size, 10) === selectedGameSize);
+        });
+      }
+      if (el.gameInviteDescription) {
+        el.gameInviteDescription.textContent = `${payload.fromName || 'Đối phương'} vừa gửi lời mời bạn cùng chơi cờ Caro ${selectedGameSize}x${selectedGameSize}.`;
+      }
       el.modalGameInvite.classList.remove('hidden');
       playMatchSound();
     }
@@ -938,7 +948,7 @@ function handleGameState(payload) {
   // Kích thước bàn cờ & điều kiện thắng
   const boardLength = (game.board && game.board.length) || 100;
   const boardSize = game.size || Math.round(Math.sqrt(boardLength)) || 10;
-  const winLength = game.winLength || (boardSize >= 10 ? 5 : (boardSize >= 7 ? 4 : 3));
+  const winLength = game.winLength || 5;
   selectedGameSize = boardSize;
 
   // Cập nhật dòng gợi ý luật chơi
@@ -1591,7 +1601,7 @@ if (el.modalPartnerInfo) {
   }
 }
 
-// ── Minigame Caro (Hỗ trợ 10x10, 8x8, 3x3) ────────
+// ── Minigame Caro (Hỗ trợ 10x10, 15x15 và 20x20) ────────
 if (el.btnMinigame) {
   el.btnMinigame.addEventListener('click', () => {
     send('game_invite', { size: selectedGameSize });
