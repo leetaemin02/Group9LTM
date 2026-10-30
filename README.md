@@ -1,156 +1,15 @@
-# Đề tài: Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket
+# 💬 ChatMatch – Hệ thống ghép cặp và trò chuyện trực tuyến
 
-## 📌 Thông tin đề tài
+> **Đề tài:** Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket
+> **Nhóm:** 9
 
-**Chủ đề:** Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket
-**Nhóm:** 9
+## 📖 Giới thiệu
 
-Repository này được xây dựng nhằm tìm hiểu và thực hành **WebSocket**, một công nghệ hỗ trợ giao tiếp hai chiều (Two-way Communication) theo thời gian thực giữa **Client** và **Server** thông qua một kết nối TCP duy trì liên tục.
+Hệ thống cho phép người dùng nhập biệt danh, chọn sở thích, rồi được ghép cặp ngẫu nhiên với một người dùng khác để trò chuyện 1-1 theo thời gian thực qua **WebSocket thuần** (thư viện `ws`).
 
-Thông qua đề tài, nhóm tìm hiểu nguyên lý hoạt động, kiến trúc, quá trình thiết lập kết nối WebSocket và xây dựng một hệ thống **ghép cặp ngẫu nhiên hai người dùng và trò chuyện trực tiếp (1-1)** để minh họa khả năng truyền nhận dữ liệu theo thời gian thực.
+## 🏗️ Kiến trúc
 
----
-
-## 👥 Thành viên nhóm
-
-| STT | Họ và tên                | MSSV           | Vai trò     |
-| --- | ------------------------ | -------------- | ------------|
-| 1   | **Dương Đình Thuận**     | **2331540247** | Nhóm trưởng |
-| 2   | **Nguyễn Thế Minh**      | **2331540226** | Thành viên  |
-| 3   | **Huỳnh Thị Thanh Thảo** | **2431540240** | Thành viên  |
-
----
-
-## 🧭 Định hướng đề tài
-
-### Bài toán
-
-Người dùng truy cập website, nhập biệt danh (và có thể chọn sở thích), sau đó bấm **"Bắt đầu"**. Hệ thống tự động **ghép cặp** người dùng đó với một người dùng khác đang chờ, rồi mở một phòng chat riêng giữa hai người. Bất cứ lúc nào, mỗi người có thể **bỏ qua (Skip)** để được ghép với người khác hoặc **thoát**.
-
-### Luồng hoạt động tổng quát
-
-```text
-Người dùng mở web
-      │
-      ▼
-Kết nối WebSocket ──> Nhập biệt danh / chọn sở thích
-      │
-      ▼
-Gửi yêu cầu "find_match" ──> Vào hàng đợi (Waiting Queue)
-      │
-      ▼
-Server tìm được người phù hợp ──> Tạo phòng chat 1-1
-      │
-      ▼
-Hai người nhắn tin realtime ──> Skip / Thoát ──> Quay lại hàng đợi
 ```
-
-### Phạm vi thực hiện
-
-* Chat **văn bản** 1-1 giữa hai người được ghép cặp.
-* Hàng đợi ghép cặp và quản lý phòng chat phía Server.
-* Chỉ báo "đang nhập…", thông báo đối phương rời phòng, số người đang online.
-* Cơ chế kiểm soát cơ bản: giới hạn tốc độ gửi tin, báo cáo (Report).
-* Không lưu nội dung tin nhắn (chỉ giữ trong bộ nhớ khi phiên còn hoạt động).
-
-> Video/voice call (WebRTC) **nằm ngoài phạm vi** của đề tài để tập trung vào WebSocket. Đây có thể là hướng mở rộng sau này.
-
----
-
-## 🎯 Mục tiêu đề tài
-
-Đề tài hướng đến các mục tiêu:
-
-* Tìm hiểu khái niệm và vai trò của WebSocket.
-* Tìm hiểu kiến trúc hoạt động của WebSocket.
-* Phân biệt WebSocket với HTTP thông thường.
-* Tìm hiểu quá trình **WebSocket Handshake**.
-* Hiểu cơ chế giao tiếp hai chiều giữa Client và Server.
-* Thiết kế **giao thức thông điệp (message protocol)** riêng cho ứng dụng.
-* Xây dựng **thuật toán ghép cặp** dựa trên hàng đợi và sở thích người dùng.
-* Quản lý nhiều kết nối đồng thời, xử lý ngắt kết nối và kết nối lại.
-* Thực hành xây dựng ứng dụng giao tiếp theo thời gian thực.
-* Đánh giá hiệu năng hệ thống bằng kiểm thử tải.
-
----
-
-## 🔎 Các project tham khảo
-
-Nhóm đã khảo sát một số project mã nguồn mở trên GitHub có chức năng tương tự (ghép cặp ngẫu nhiên + chat realtime):
-
-| # | Project | Công nghệ chính | Cách ghép cặp | Điểm đáng chú ý |
-| - | ------- | --------------- | ------------- | --------------- |
-| 1 | [Vignesh318/matching-chat-app](https://github.com/Vignesh318/matching-chat-app) | Node.js, WebSocket | Hàng đợi vào trước – ghép trước (FIFO) | Chat văn bản 1-1, có Skip và Report. Tác giả nói rõ đây là prototype, chưa sẵn sàng cho production |
-| 2 | [muhibrahimkhan/stranger-chat](https://github.com/muhibrahimkhan/stranger-chat) | Node.js, Express, Socket.IO, MongoDB | Ghép theo độ tương đồng sở thích (TF-IDF + cosine similarity) | Có dịch trực tiếp, kiểm duyệt nội dung, trang admin (JWT), kiến trúc tách lớp rõ ràng |
-| 3 | [playsrc/omedev](https://github.com/playsrc/omedev) | Next.js, Pusher Channels, MongoDB | FIFO: tìm phòng trống, không có thì tạo phòng mới | Chỉ lưu id phòng trong tối đa 1 ngày, giao diện responsive, có light/dark theme |
-| 4 | [testvoltas1-cyber/SwiftTalk](https://github.com/testvoltas1-cyber/SwiftTalk) | React, TypeScript, WebRTC DataChannel, WebSocket | Ghép theo thẻ sở thích (tùy chọn) | Tin nhắn P2P, WebSocket làm dự phòng, có Report / Block / lọc từ thô tục |
-| 5 | [aryan9867bar/RandomVideoChat](https://github.com/aryan9867bar/RandomVideoChat) | FastAPI, Redis, WebSocket, WebRTC, Docker | Hàng đợi lưu trên Redis | Tách thành Matching Service và Signalling Service; có [phần frontend](https://github.com/aryan9867bar/RandomVideoChat-Web) riêng |
-| 6 | [iamshiv007/omegle-clone](https://github.com/iamshiv007/omegle-clone) | Node.js, React, Socket.IO | Ghép ngẫu nhiên đơn giản | Bản clone cơ bản, dễ đọc để hiểu luồng hoạt động |
-
-> 📝 Nội dung bảng trên được tổng hợp từ phần mô tả (README) của từng project. Nhóm sẽ đọc kỹ mã nguồn để xác nhận trước khi đưa vào báo cáo chính thức.
-
----
-
-## 🚀 Nhóm sẽ làm thêm / phát triển thêm những gì?
-
-Từ việc khảo sát ở trên, nhóm nhận thấy các project tham khảo phần lớn hướng đến sản phẩm hoàn chỉnh (video chat, dịch, admin…) và **dùng thư viện bọc sẵn (Socket.IO, Pusher)**, nên ít làm lộ rõ cách WebSocket thực sự hoạt động. Nhóm định hướng khác biệt như sau:
-
-### 1. Dùng WebSocket thuần (thư viện `ws`) thay vì Socket.IO / Pusher
-
-* Tự thiết kế và xử lý toàn bộ vòng đời kết nối: `open`, `message`, `close`, `error`.
-* Giúp nhóm hiểu và trình bày rõ **Handshake, Frame, Ping/Pong, Close Code** – đúng trọng tâm của môn học.
-
-### 2. Thiết kế giao thức thông điệp JSON có tài liệu rõ ràng
-
-* Định nghĩa đầy đủ các loại message Client ↔ Server (xem mục [Giao thức thông điệp](#-giao-thức-thông-điệp)).
-* Kiểm tra dữ liệu đầu vào (validate) ở Server, từ chối message sai định dạng.
-
-### 3. Thuật toán ghép cặp có nới lỏng theo thời gian chờ
-
-* Ưu tiên ghép người có **nhiều sở thích chung nhất**.
-* Nếu chờ quá lâu (ví dụ 10 giây) thì **tự động nới lỏng điều kiện** và ghép ngẫu nhiên để tránh chờ vô hạn.
-* Cách tính điểm đơn giản, dễ giải thích hơn so với TF-IDF, phù hợp quy mô đề tài.
-
-### 4. Độ ổn định của kết nối
-
-* **Heartbeat (Ping/Pong)** để phát hiện kết nối "chết" và dọn khỏi hàng đợi / phòng chat.
-* **Tự động kết nối lại** ở Client (exponential backoff).
-* Thông báo cho đối phương khi một bên mất kết nối đột ngột.
-
-### 5. Trải nghiệm người dùng bằng tiếng Việt
-
-* Giao diện và thông báo hoàn toàn tiếng Việt.
-* Chỉ báo "đang nhập…", số người đang online, phím tắt Skip.
-
-### 6. Kiểm soát lạm dụng ở mức cơ bản
-
-* Giới hạn số tin nhắn/giây (rate limiting), giới hạn độ dài tin nhắn.
-* Chức năng Report và chặn tạm người vừa ghép.
-* Chống XSS bằng cách escape nội dung hiển thị.
-
-### 7. Kiểm thử tải và đo hiệu năng
-
-* Viết script mô phỏng hàng trăm client kết nối cùng lúc.
-* Đo **độ trễ ghép cặp**, **độ trễ tin nhắn** và số kết nối tối đa mà Server xử lý ổn định.
-* Đưa kết quả vào báo cáo để có số liệu thực tế.
-
-### So sánh nhanh
-
-| Tiêu chí | Các project tham khảo | Project của Nhóm 9 |
-| -------- | --------------------- | ------------------ |
-| Thư viện realtime | Phần lớn dùng Socket.IO / Pusher | WebSocket thuần (`ws`) |
-| Ghép cặp | FIFO hoặc theo sở thích | Theo sở thích + nới lỏng theo thời gian chờ |
-| Giao thức thông điệp | Thường không được mô tả chi tiết | Có tài liệu, có validate |
-| Heartbeat / kết nối lại | Chưa thấy nhắc đến trong README | Có |
-| Ngôn ngữ giao diện | Tiếng Anh | Tiếng Việt |
-| Kiểm thử tải | Chưa thấy nhắc đến trong README | Có, kèm số liệu |
-| Video / Voice | Một số project có | Không (ngoài phạm vi) |
-
----
-
-## 🏗️ Kiến trúc hệ thống
-
-```text
 ┌────────────┐                                        ┌────────────┐
 │  Client A  │                                        │  Client B  │
 │ (Browser)  │                                        │ (Browser)  │
@@ -160,444 +19,294 @@ Từ việc khảo sát ở trên, nhóm nhận thấy các project tham khảo 
                           ▼               ▼
                 ┌───────────────────────────────────┐
                 │          WebSocket Server         │
-                │                                   │
                 │  ┌─────────────────────────────┐  │
-                │  │ Connection Manager          │  │  quản lý kết nối, heartbeat
-                │  ├─────────────────────────────┤  │
-                │  │ Matchmaker (Waiting Queue)  │  │  ghép cặp theo sở thích
-                │  ├─────────────────────────────┤  │
-                │  │ Room Manager                │  │  tạo / hủy phòng chat 1-1
-                │  ├─────────────────────────────┤  │
-                │  │ Moderation                  │  │  rate limit, report
+                │  │ Connection Manager          │  │
+                │  │ Matchmaker (Waiting Queue)  │  │
+                │  │ Room Manager                │  │
+                │  │ Moderation                  │  │
                 │  └─────────────────────────────┘  │
                 └───────────────────────────────────┘
 ```
 
-### Vòng đời một phiên chat
+## 📂 Cấu trúc thư mục
 
-```text
- CONNECTED ──find_match──> WAITING ──match_found──> CHATTING
-     ▲                        │                        │
-     │                        │ cancel                 │ skip / partner_left
-     └────────────────────────┴────────────────────────┘
 ```
-
----
-
-## 📨 Giao thức thông điệp
-
-Mọi message đều là JSON có dạng `{ "type": "...", "payload": { ... } }`.
-
-**Client → Server**
-
-| type | payload | Mô tả |
-| ---- | ------- | ----- |
-| `join` | `nickname`, `interests[]` | Đăng ký biệt danh và sở thích |
-| `find_match` | – | Vào hàng đợi để tìm người ghép cặp |
-| `cancel` | – | Rời hàng đợi |
-| `message` | `text` | Gửi tin nhắn cho đối phương |
-| `typing` | `isTyping` | Báo đang nhập / ngừng nhập |
-| `skip` | – | Bỏ qua người hiện tại, tìm người mới |
-| `report` | `reason` | Báo cáo đối phương |
-
-**Server → Client**
-
-| type | payload | Mô tả |
-| ---- | ------- | ----- |
-| `connected` | `clientId`, `onlineCount` | Xác nhận kết nối thành công |
-| `waiting` | – | Đang trong hàng đợi |
-| `match_found` | `partnerNickname`, `commonInterests[]` | Ghép cặp thành công |
-| `message` | `text`, `timestamp` | Tin nhắn từ đối phương |
-| `typing` | `isTyping` | Đối phương đang nhập |
-| `partner_left` | – | Đối phương đã thoát hoặc mất kết nối |
-| `online_count` | `count` | Cập nhật số người online |
-| `error` | `code`, `message` | Thông báo lỗi (sai định dạng, gửi quá nhanh…) |
-
----
-
-## 📖 WebSocket là gì?
-
-**WebSocket** là một giao thức truyền thông được thiết kế để cung cấp khả năng giao tiếp **hai chiều, toàn thời gian thực** giữa Client và Server trên một kết nối TCP duy trì liên tục.
-
-Khác với mô hình HTTP truyền thống, trong đó Client thường gửi Request và chờ Server trả về Response, WebSocket cho phép cả Client và Server **chủ động gửi dữ liệu cho nhau** sau khi kết nối được thiết lập.
-
-### Đặc điểm chính
-
-* 🔄 Giao tiếp hai chiều (Full-Duplex).
-* ⚡ Truyền dữ liệu theo thời gian thực.
-* 🔗 Duy trì kết nối liên tục.
-* 📡 Server có thể chủ động gửi dữ liệu đến Client.
-* 🚀 Giảm overhead so với việc liên tục tạo HTTP Request.
-* 🌐 Hoạt động trên nền TCP.
-
----
-
-## 🔄 Cơ chế hoạt động
-
-Quá trình giao tiếp WebSocket có thể được mô tả qua các bước:
-
-```text
-┌──────────────┐                         ┌──────────────┐
-│    Client    │                         │    Server    │
-└──────┬───────┘                         └──────┬───────┘
-       │                                        │
-       │  HTTP Upgrade Request                  │
-       │───────────────────────────────────────>│
-       │                                        │
-       │  HTTP 101 Switching Protocols          │
-       │<───────────────────────────────────────│
-       │                                        │
-       │        WebSocket Connection            │
-       │<======================================>│
-       │                                        │
-       │  Message                               │
-       │───────────────────────────────────────>│
-       │                                        │
-       │  Message                               │
-       │<───────────────────────────────────────│
-       │                                        │
-       │  Close Connection                      │
-       │<======================================>│
-       │                                        │
-```
-
-### 1. Client gửi yêu cầu kết nối
-
-Client bắt đầu bằng một HTTP Request và yêu cầu Server nâng cấp kết nối từ HTTP sang WebSocket thông qua header:
-
-```http
-Connection: Upgrade
-Upgrade: websocket
-```
-
-### 2. Server xác nhận
-
-Nếu Server hỗ trợ WebSocket, Server phản hồi:
-
-```http
-HTTP/1.1 101 Switching Protocols
-```
-
-Sau bước này, kết nối HTTP được nâng cấp thành kết nối WebSocket.
-
-### 3. Trao đổi dữ liệu
-
-Sau khi kết nối được thiết lập, Client và Server có thể gửi dữ liệu cho nhau bất kỳ lúc nào.
-
-```text
-Client ────────────────> Server
-       Message
-
-Client <──────────────── Server
-       Message
-```
-
-### 4. Đóng kết nối
-
-Khi không cần sử dụng WebSocket nữa, một trong hai phía có thể gửi Close Frame để kết thúc kết nối.
-
----
-
-## ⚔️ WebSocket và HTTP
-
-| Tiêu chí            | HTTP                         | WebSocket                           |
-| ------------------- | ---------------------------- | ----------------------------------- |
-| Mô hình             | Request / Response           | Hai chiều                           |
-| Kết nối             | Thường theo từng Request     | Duy trì liên tục                    |
-| Server chủ động gửi | Không thuận tiện             | Có                                  |
-| Real-time           | Hạn chế                      | Tốt                                 |
-| Overhead            | Cao hơn khi polling liên tục | Thấp hơn sau khi kết nối            |
-| Ứng dụng            | Website, REST API            | Chat, Game, Notification, Live Data |
-
----
-
-## 🧩 Các thành phần chính
-
-### Client
-
-Client là phía khởi tạo kết nối WebSocket và có thể gửi/nhận dữ liệu.
-
-Ví dụ JavaScript:
-
-```javascript
-const socket = new WebSocket("ws://localhost:8080");
-
-socket.onopen = () => {
-    console.log("Đã kết nối WebSocket");
-    socket.send(JSON.stringify({ type: "find_match" }));
-};
-
-socket.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    console.log("Server:", msg.type, msg.payload);
-};
-
-socket.onclose = () => {
-    console.log("Kết nối đã đóng");
-};
-
-socket.onerror = (error) => {
-    console.error("WebSocket Error:", error);
-};
-```
-
-### Server
-
-Server chịu trách nhiệm:
-
-* Chấp nhận kết nối từ Client.
-* Quản lý các kết nối đang hoạt động.
-* Quản lý hàng đợi và **ghép cặp** người dùng.
-* Tạo, quản lý và hủy các phòng chat 1-1.
-* Nhận dữ liệu từ Client và chuyển tiếp cho đúng đối phương.
-* Xử lý các sự kiện kết nối và ngắt kết nối.
-
----
-
-## 💡 Ứng dụng thực tế
-
-WebSocket được sử dụng trong nhiều hệ thống yêu cầu dữ liệu cập nhật theo thời gian thực:
-
-### 💬 Ứng dụng Chat và ghép cặp
-
-```text
-User A ──> WebSocket Server ──> User B
-```
-
-Tin nhắn có thể được chuyển đến User B ngay lập tức mà không cần liên tục gửi HTTP Request. Đây cũng là nền tảng của các ứng dụng ghép cặp trò chuyện ngẫu nhiên.
-
-### 🎮 Game Online
-
-WebSocket có thể được sử dụng để truyền:
-
-* Vị trí nhân vật.
-* Trạng thái người chơi.
-* Sự kiện trong game.
-* Điểm số.
-* Thông tin trận đấu.
-
-### 🔔 Thông báo thời gian thực
-
-Ví dụ:
-
-```text
-Server
-   │
-   ├──> User 1: Có thông báo mới
-   ├──> User 2: Có thông báo mới
-   └──> User 3: Có thông báo mới
-```
-
-### 📊 Dữ liệu trực tiếp
-
-WebSocket phù hợp với các hệ thống cần cập nhật liên tục như:
-
-* Dashboard.
-* Giá cổ phiếu.
-* Theo dõi đơn hàng.
-* Trạng thái máy chủ.
-* Hệ thống giám sát.
-
----
-
-## 🛠️ Công nghệ sử dụng
-
-* **WebSocket** (thư viện [`ws`](https://github.com/websockets/ws) cho Node.js)
-* **TCP/IP**
-* **HTTP/HTTPS**
-* **HTML5**
-* **CSS3**
-* **JavaScript**
-* **Node.js** (WebSocket Server)
-
----
-
-## 📂 Cấu trúc Repository
-
-Cấu trúc repository dự kiến:
-
-```text
-WebSocket/
-│
-├── client/
-│   ├── index.html
-│   ├── style.css
-│   └── script.js
-│
-├── server/
-│   ├── server.js          # Khởi tạo WebSocket Server, xử lý kết nối
-│   ├── matchmaker.js      # Hàng đợi và thuật toán ghép cặp
-│   ├── roomManager.js     # Quản lý phòng chat 1-1
-│   ├── protocol.js        # Định nghĩa và kiểm tra message
-│   └── package.json
-│
+ChatMatch/
+├── frontend/
+│   ├── index.html        # Giao diện người dùng
+│   ├── style.css         # Stylesheet (Dark mode, responsive)
+│   └── script.js         # Frontend logic và WebSocket client
+├── backend/
+│   ├── server.js         # HTTP server, phục vụ frontend và WebSocket
+│   ├── companionBot.js   # Trợ lý Lumi
+│   ├── matchmaker.js     # Hàng đợi, mood matching & anti-targeted pairing
+│   ├── roomManager.js    # Quản lý phòng chat 1-1 & Minigame Caro
+│   ├── contentFilter.js  # Bộ lọc ngôn từ thô tục, xúc phạm, chat đen
+│   ├── icebreakers.js    # Bộ câu hỏi phá băng kết nối người lạ
+│   ├── protocol.js       # Giao thức thông điệp + schema validate
+│   ├── moderation.js     # Rate limit, report, block, ban & anti-skip
+│   ├── redisManager.js   # Redis Pub/Sub adapter (Multi-node scaling)
+│   ├── linkSafety.js     # Heuristic nhận diện cấu trúc URL
+│   ├── webRisk.js        # Tra cứu reputation URL với Google Web Risk (tùy chọn)
+│   ├── attachmentStorage.js # Lưu tệp riêng tư trên Azure Blob Storage
+│   ├── package.json      # Dependencies và scripts của backend
+│   ├── package-lock.json # Khóa phiên bản dependencies
+│   └── .env.example      # Mẫu cấu hình môi trường
+├── docs/                 # Tài liệu hệ thống chi tiết
+│   ├── README.md         # Mục lục tài liệu
+│   ├── ARCHITECTURE.md   # Kiến trúc & nguyên lý WebSocket
+│   ├── PROTOCOL.md       # Đặc tả giao thức thông điệp JSON
+│   ├── TESTING.md        # Kế hoạch & kịch bản kiểm thử
+│   ├── REDIS_GUIDE.md    # Hướng dẫn Redis Pub/Sub nhiều instance
+│   └── SECURITY_COMPLIANCE.md # Bảo mật và tuân thủ
 ├── tests/
-│   └── load-test.js       # Script mô phỏng nhiều client
-│
-├── docs/
-│   └── README.md
-│
+│   ├── unit-test.js      # Kiểm thử đơn vị toàn bộ module (100% pass)
+│   └── load-test.js      # Script kiểm thử tải
 └── README.md
 ```
 
-> Cấu trúc thư mục có thể thay đổi tùy theo quá trình triển khai thực tế của nhóm.
+## 🚀 Cài đặt & Chạy
 
----
+### Frontend và Backend hoạt động thế nào?
 
-## 🚀 Hướng dẫn chạy Project
+- **Frontend** nằm trong `frontend/`: HTML, CSS và JavaScript chạy trong trình duyệt.
+- **Backend** nằm trong `backend/`: Node.js phục vụ các file frontend qua HTTP và xử lý chat qua WebSocket.
+- Vì backend đang phục vụ frontend, chỉ cần chạy **một server**. Truy cập địa chỉ HTTP của server sẽ mở giao diện; trình duyệt tự kết nối WebSocket tới cùng địa chỉ.
 
-### Bước 1: Clone Repository
+### Yêu cầu
+- [Node.js](https://nodejs.org/) >= 18.x
 
+### Bước 1: Cài đặt dependencies
 ```bash
-git clone <repository-url>
-```
-
-Di chuyển vào thư mục project:
-
-```bash
-cd WebSocket
-```
-
-### Bước 2: Cài đặt Dependencies
-
-```bash
-cd server
+cd backend
 npm install
 ```
 
-### Bước 3: Khởi động WebSocket Server
-
+### Bước 2: Khởi động Server
 ```bash
 npm start
 ```
 
-Hoặc:
+Server sẽ chạy tại `http://localhost:3001`.
+Nếu cổng 3001 đang được sử dụng, hãy chọn cổng khác, ví dụ:
 
-```bash
-node server.js
+```powershell
+$env:PORT=3002; npm start
 ```
 
-Server có thể được khởi chạy tại:
+Nếu đã đổi cổng sang 3002, mở `http://localhost:3002` trong trình duyệt.
 
-```text
-ws://localhost:8080
+### Bật kiểm tra danh tiếng liên kết (tùy chọn)
+
+Mặc định ứng dụng chỉ dùng heuristic cục bộ; không gửi URL ra ngoài. Để tra cứu URL với Google Web Risk:
+1. Tạo Google Cloud project, bật [Web Risk API](https://cloud.google.com/web-risk/docs/lookup-api) và tạo API key; giới hạn key chỉ dùng Web Risk API.
+2. Cấu hình key bằng secret/environment variable của môi trường deploy. Không commit key hoặc đặt key trong frontend.
+3. Tin nhắn chứa tối đa 5 URL duy nhất sẽ được kiểm tra trước khi chuyển tiếp. Nếu Google xác nhận URL thuộc danh sách phishing/malware/phần mềm không mong muốn, server chặn toàn bộ tin nhắn và thông báo cho cả hai người dùng. Tin nhắn vượt quá giới hạn 5 URL cũng bị chặn để tránh bỏ sót URL chưa quét.
+4. Nếu API lỗi, hệ thống vẫn cho gửi nhưng cảnh báo rằng liên kết chưa được xác minh. Kết quả “không có trong danh sách” không đảm bảo an toàn.
+
+Ví dụ PowerShell cho phiên chạy local (thay bằng key thật, không lưu vào source):
+```powershell
+$env:GOOGLE_WEB_RISK_API_KEY='YOUR_API_KEY'
+npm start
 ```
 
-### Bước 4: Chạy Client
+Việc bật API gửi URL nguyên bản (có thể gồm path/query) tới Google. Chỉ bật sau khi đã quyết định cách thông báo người dùng và rà soát điều khoản, quyền riêng tư, hạn mức/chi phí của Google Cloud. Link rút gọn có thể che giấu đích đến; ứng dụng không tự mở link hoặc theo redirect.
 
-Mở file:
+### Gửi ảnh, video và tài liệu
 
-```text
-client/index.html
+Tính năng đính kèm dùng Azure Blob Storage; nếu chưa cấu hình tài khoản storage, nút đính kèm sẽ báo chưa khả dụng. Tệp được gửi qua server tới container riêng tư, không bật public access:
+
+- Ảnh: JPG/JPEG, PNG, GIF, WebP; tài liệu: PDF, DOCX, XLSX, PPTX, TXT, CSV — tối đa 10 MB mỗi tệp.
+- Video: MP4 hoặc WebM — tối đa 50 MB.
+- Tệp khác (bao gồm chương trình/script và SVG) bị từ chối. Server kiểm tra phần mở rộng, dung lượng và chữ ký định dạng cơ bản, sau đó chờ Azure Defender for Storage quét malware; chỉ kết quả `No threats found` mới được chia sẻ.
+- Người nhận tải trực tiếp từ Blob qua URL HTTPS có quyền chỉ đọc, hết hạn sau 24 giờ. Hãy cấu hình Azure Storage lifecycle để xóa blob trong prefix `chat/` sau khoảng 7 ngày; lifecycle chạy bất đồng bộ nên thời điểm xóa thực tế có thể trễ. Nếu bỏ qua bước này, tệp vẫn chiếm dung lượng sau khi link hết hạn.
+- Kết quả `Malicious`, `Error`, `Not scanned`, thiếu kết quả hoặc vượt thời gian chờ đều bị từ chối (fail-closed). Azure Defender có thể quét chậm; app chờ tối đa 3 phút mặc định. Bật Defender for Storage **On-upload malware scanning**, giữ bật blob index tags và đặt giới hạn chi phí quét hàng tháng.
+
+Thiết lập:
+1. Tạo Azure Storage account loại General-purpose v2 và container `chat-attachments`. Tắt anonymous/public access ở cả account và container; chỉ bật HTTPS và tối thiểu TLS 1.2.
+2. Bật Defender for Storage và **On-upload malware scanning** cho Storage Account. Để mặc định bật kết quả blob index tags và cấu hình monthly scan cap/chi phí. Có thể bật soft delete/quarantine cho blob bị phát hiện có mã độc.
+3. Bật system-assigned Managed Identity cho ứng dụng chạy ở Azure. Cấp `Storage Blob Data Contributor` ở phạm vi container và `Storage Blob Delegator` ở phạm vi Storage Account. Khi phát triển local, dùng identity của `az login` và cấp hai role tương tự cho user đó.
+4. Đặt `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_STORAGE_CONTAINER_NAME` trong environment. Nếu dùng endpoint tùy chỉnh, đặt thêm `AZURE_STORAGE_BLOB_ENDPOINT`; mặc định SDK dùng `https://<account>.blob.core.windows.net`.
+5. Sinh `ATTACHMENT_TOKEN_SECRET` bằng lệnh bên dưới rồi đưa vào secret store của môi trường deploy. Dùng cùng giá trị trên mọi instance; không commit `.env` hay in secret ra log.
+6. Tạo file `lifecycle-policy.json` từ ví dụ dưới đây và áp dụng policy bằng Azure CLI. Prefix phải có dạng `<container>/chat/`.
+7. Đặt `MAX_CONCURRENT_ATTACHMENT_UPLOADS` theo giới hạn bộ nhớ/băng thông của mỗi instance (mặc định 4); `ATTACHMENT_SCAN_TIMEOUT_MS` mặc định 180000 ms. Khi đạt giới hạn upload, server trả HTTP 503 để client thử lại sau.
+
+PowerShell: đăng nhập local, tạo container private và sinh secret trong phiên terminal hiện tại:
+```powershell
+az login
+$env:AZURE_STORAGE_ACCOUNT_NAME = '<storage-account-name>'
+$env:AZURE_STORAGE_CONTAINER_NAME = 'chat-attachments'
+$env:ATTACHMENT_TOKEN_SECRET = node -p "require('node:crypto').randomBytes(32).toString('base64url')"
+az storage container create --account-name $env:AZURE_STORAGE_ACCOUNT_NAME --name $env:AZURE_STORAGE_CONTAINER_NAME --auth-mode login --public-access off
 ```
 
-bằng trình duyệt hoặc sử dụng Live Server trong Visual Studio Code.
+Sau khi container tồn tại, cấp role cho principal chạy ứng dụng. Thay `$principalId` bằng Object ID của Managed Identity hoặc user đã `az login`; trong Azure CLI chọn đúng `--assignee-principal-type` (`ServicePrincipal` cho Managed Identity, `User` cho local developer):
+```powershell
+$resourceGroup = '<resource-group>'
+$storageAccount = $env:AZURE_STORAGE_ACCOUNT_NAME
+$containerName = $env:AZURE_STORAGE_CONTAINER_NAME
+$principalId = '<principal-object-id>'
+$storageId = az storage account show --name $storageAccount --resource-group $resourceGroup --query id --output tsv
+$containerScope = "$storageId/blobServices/default/containers/$containerName"
 
-> Để thử ghép cặp, hãy mở `client/index.html` ở **hai tab (hoặc hai trình duyệt) khác nhau** và bấm "Bắt đầu" ở cả hai.
+az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 'Storage Blob Data Contributor' --scope $containerScope
+az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 'Storage Blob Delegator' --scope $storageId
+```
 
----
+Với local developer, lấy Object ID bằng `$principalId = az ad signed-in-user show --query id --output tsv` và đổi `ServicePrincipal` thành `User`. Cần quyền quản trị phù hợp để tạo role assignment; sau khi gán role, có thể cần chờ vài phút để RBAC có hiệu lực. Container có thể tạo từ Portal nếu lệnh CLI chưa được cấp quyền data-plane.
+
+Ví dụ rule lifecycle JSON (tên container/prefix phải khớp cấu hình thực tế):
+```json
+{
+  "rules": [{
+    "enabled": true,
+    "name": "delete-chat-attachments-after-seven-days",
+    "type": "Lifecycle",
+    "definition": {
+      "filters": {
+        "blobTypes": ["blockBlob"],
+        "prefixMatch": ["chat-attachments/chat/"]
+      },
+      "actions": {
+        "baseBlob": {
+          "delete": { "daysAfterModificationGreaterThan": 7 }
+        }
+      }
+    }
+  }]
+}
+```
+Lưu JSON trên thành `lifecycle-policy.json`, sau đó chạy lệnh Azure CLI (cần quyền quản lý Storage Account):
+```powershell
+az storage account management-policy create --resource-group $resourceGroup --account-name $storageAccount --policy '@lifecycle-policy.json'
+az storage account management-policy show --resource-group $resourceGroup --account-name $storageAccount
+```
+
+Trong Azure App Service/Container Apps, bật Managed Identity, đặt các biến môi trường trên dưới dạng app settings/secret, rồi khởi động lại ứng dụng. Trên mọi replica phải dùng cùng account, container và `ATTACHMENT_TOKEN_SECRET`; mỗi identity phải có role phù hợp.
+
+Ứng dụng dùng `DefaultAzureCredential`: Managed Identity trên Azure và thông tin xác thực developer đã đăng nhập khi chạy local; không lưu Storage Account Key trong mã nguồn. Upload đi qua backend để kiểm tra kích thước/chữ ký, vì vậy backend cần đủ băng thông cho tệp (đến 50 MB). Mỗi process mặc định xử lý tối đa 4 upload đồng thời. Blob index tags là kết quả scan do Defender ghi nhưng không chống sửa đổi; container phải private, không cấp credentials cho browser và chỉ backend được phép tạo SAS sau khi kiểm tra kết quả. Kết quả “No threats found” không bảo đảm tệp vô hại tuyệt đối. Tin nhắn không được lưu lịch sử sau phòng chat; blob được dọn theo lifecycle policy, nhưng Azure chạy policy bất đồng bộ nên không bảo đảm xóa chính xác vào ngày thứ 7.
+
+Tham khảo hướng dẫn chính thức về [Defender for Storage on-upload malware scanning](https://learn.microsoft.com/azure/defender-for-cloud/on-upload-malware-scanning), [kết quả quét malware](https://learn.microsoft.com/azure/defender-for-cloud/introduction-malware-scanning), [Azure Blob lifecycle policy](https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-policy-structure), [ủy quyền Azure CLI bằng Microsoft Entra](https://learn.microsoft.com/azure/storage/blobs/authorize-data-operations-cli) và [Azure CLI quản lý lifecycle policy](https://learn.microsoft.com/cli/azure/storage/account/management-policy?view=azure-cli-latest).
+
+Sau khi cấu hình, kiểm tra với hai trình duyệt/phiên riêng: gửi ảnh, video và tài liệu; xác nhận người nhận mở được link HTTPS, link chỉ có quyền đọc và hết hạn sau 24 giờ. Thử định dạng bị cấm, tệp quá giới hạn và upload không có ticket để xác nhận bị từ chối. Trước khi public, kiểm thử thêm quyền Azure trên đúng identity, private access, lifecycle policy và giới hạn tải đồng thời. Lỗi `403` ngay sau khi gán role thường cần thời gian để RBAC lan truyền; lỗi `AuthenticationFailed` cần kiểm tra identity/default credential và tên account/container.
+
+### Bước 3: Mở trình duyệt
+Truy cập `http://localhost:3001` (hoặc cổng đã chọn). Mặc định, các kết nối cùng IP vẫn có thể ghép cặp để hỗ trợ thử nghiệm nhiều tab trên máy local. Có thể bật giới hạn ghép cùng IP bằng `DISALLOW_SAME_IP=true`. Nếu đang dùng một mình, chọn **Tâm sự cùng Lumi**.
 
 ## 🧪 Kiểm thử
 
-### Kiểm thử chức năng
-
-Sau khi Server được khởi động, mở hai Client và thực hiện:
-
-```text
-Client A ── find_match ──> Server ──┐
-                                    ├── match_found ──> A và B
-Client B ── find_match ──> Server ──┘
-
-Client A ── "Hello WebSocket!" ──> Server ──> Client B
-Client B ── "Hello Client!"    ──> Server ──> Client A
-```
-
-Các tình huống cần kiểm tra:
-
-* Ghép cặp thành công giữa hai người.
-* Một người chờ một mình (chưa có ai để ghép).
-* Skip: cả hai quay lại hàng đợi đúng cách.
-* Một bên đóng tab đột ngột: bên còn lại nhận `partner_left`.
-* Gửi message sai định dạng hoặc quá nhanh: Server trả về `error`.
-
-### Kiểm thử tải
-
 ```bash
-node tests/load-test.js
+# Chạy Unit Tests
+cd ..
+node tests/unit-test.js
+
+# Mô phỏng tải 100 client
+node tests/load-test.js 100
+
+# Mô phỏng tải 200 client
+node tests/load-test.js 200 ws://localhost:3001
 ```
 
-Chỉ số cần đo: độ trễ ghép cặp, độ trễ tin nhắn, số kết nối đồng thời tối đa.
+Để chạy 200 client trên cùng máy, hãy tăng tạm `MAX_CONNECTIONS_PER_IP` khi khởi động server; xem hướng dẫn và số liệu thực nghiệm trong `docs/TESTING.md`.
 
----
+## 📨 Giao thức thông điệp
 
-## 🔐 WebSocket Secure
+Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
 
-Đối với môi trường thực tế, WebSocket có thể sử dụng **WSS (WebSocket Secure)** thay cho WS.
+### Client → Server
 
-| Giao thức | Mô tả                          |
-| --------- | ------------------------------ |
-| `ws://`   | WebSocket thông thường         |
-| `wss://`  | WebSocket được mã hóa bằng TLS |
+| type | payload | Mô tả |
+|------|---------|-------|
+| `join` | `nickname`, `interests[]`, `mood`, `deviceId` | Đăng ký biệt danh, sở thích, tâm trạng và định danh thiết bị |
+| `find_match` | – | Vào hàng đợi ghép cặp |
+| `start_solo` | – | Vào phòng tâm sự và chơi cờ Caro giải trí cùng Trợ lý Lumi |
+| `cancel` | – | Rời hàng đợi |
+| `message` | `text` | Gửi tin nhắn (tự động kiểm duyệt ngôn từ) |
+| `typing` | `isTyping` | Báo đang nhập / ngừng nhập |
+| `skip` | – | Bỏ qua, tìm người mới (hoặc chuyển từ Bot sang người thật) |
+| `report` | `reason` | Báo cáo đối phương |
+| `icebreaker` | – | Yêu cầu gợi ý câu hỏi phá băng |
+| `game_invite` | – | Mời đối phương chơi Minigame Caro 3x3 |
+| `game_accept` | – | Chấp nhận thách đấu cờ Caro |
+| `game_move` | `index` | Đánh nước đi vào ô 0-8 |
+| `game_reset` | – | Chơi lại ván cờ mới |
+| `game_quit` | – | Thu gọn / thoát bàn cờ |
 
-Ví dụ:
+### Server → Client
 
-```javascript
-const socket = new WebSocket("wss://example.com/socket");
-```
+| type | payload | Mô tả |
+|------|---------|-------|
+| `connected` | `clientId`, `onlineCount` | Xác nhận kết nối |
+| `waiting` | – | Đang trong hàng đợi ghép cặp |
+| `solo_hint` | `waitSeconds`, `message` | Gợi ý tâm sự/chơi game cùng Lumi khi chỉ có 1 người hoặc chờ lâu |
+| `match_found` | `partnerNickname`, `commonInterests[]`, `partnerMood`, `isBot` | Ghép cặp thành công (người thật hoặc Bot Lumi) |
+| `message` | `text`, `timestamp` | Tin nhắn từ đối phương |
+| `typing` | `isTyping` | Đối phương đang nhập |
+| `partner_left` | `reason` | Đối phương rời phòng |
+| `icebreaker` | `question`, `category` | Gợi ý chủ đề mở đầu trò chuyện |
+| `game_state` | `board`, `turn`, `status`, `winner`, `winningLine` | Trạng thái bàn cờ Minigame |
+| `kicked` | `reason`, `banExpiresAt` | Bị buộc rời phòng ngay lập tức do vi phạm |
+| `online_count` | `count` | Số người online thời gian thực |
+| `error` | `code`, `message` | Thông báo lỗi hệ thống |
 
-`wss://` tương tự ý tưởng của HTTPS so với HTTP, giúp bảo vệ dữ liệu truyền giữa Client và Server.
+## ⚙️ Tính năng chính & Điểm nhấn (Highlights)
 
----
+- ✅ **Trợ lý Đồng hành Tâm sự & AI Minigame Solo (Lumi ✨)**:
+  - **Giải quyết bài toán "Chỉ có 1 người dùng trực tuyến / Phòng vắng":** Người dùng không bao giờ bị đẩy ra ngoài hay phải chờ đợi đơn độc trong chán nản.
+  - **Tâm sự & Giải tỏa cảm xúc:** Lắng nghe, thấu cảm, động viên ấm áp theo tâm trạng (`tam_su`, `chan_nan`, `vui_ve`, `hoc_tap`, `tim_ban_game`), chia sẻ bài tập hít thở thư giãn 4-7-8, xả stress.
+  - **Minigame Caro 3x3 1-1 với AI:** Người dùng có thể bấm "🎮 Caro 1-1" bất cứ lúc nào để so tài cờ giải trí một mình. Bot sở hữu thuật toán AI thông minh (biết chặn nước nguy hiểm, ăn nước thắng) kèm các bình luận vui vẻ.
+  - **Hiệu ứng Typing mượt mà:** Bot mô phỏng độ trễ gõ phím chân thực (0.8s - 1.8s) như một người bạn thật sự.
+  - **Chuyển đổi linh hoạt:** Khi người dùng muốn tìm người thật, chỉ cần bấm nút "👥 Tìm người thật" là được đưa ngay về hàng đợi `Matchmaker`.
+- ✅ **WebSocket thuần (`ws`)** – Tuân thủ chuẩn RFC 6455, hiệu năng cao, không phụ thuộc socket.io.
+- ✅ **Ghép cặp theo Tâm trạng (Mood Matching)** – Chọn tâm trạng (Tùy duyên, Muốn tâm sự, Vui vẻ, Tìm bạn game, Cùng học tập, Cần lắng nghe) giúp kết nối những người cùng "tần số cảm xúc".
+- ✅ **Gợi ý phá băng (Icebreaker Prompts)** – Tự động đề xuất chủ đề & câu hỏi độc đáo (Hài hước, Giả định, Tâm sự, Sở thích) chỉ với 1 click, dập tan cảm giác sượng sùng, ngượng ngùng giữa 2 người lạ.
+- ✅ **Minigame 1-1 (Cờ Caro 3x3)** – Tích hợp trò chơi đối kháng trực tiếp ngay trong phòng chat giúp tương tác sinh động, tạo tiếng cười và gắn kết tự nhiên.
+- ✅ **Chống lợi dụng Tool & Targeted Pairing**:
+  - Ghép theo mức độ tương thích trước thời hạn; khi bằng điểm giữ thứ tự FIFO. Sau thời gian chờ, ghép ứng viên hợp lệ theo FIFO.
+  - `Anti-Skip Spam Cooldown`: Phát hiện bot bấm skip liên tục (> 5 lần/30s) và khóa tạm 30s.
+  - `Anti-Same IP`: Có thể bật bằng `DISALLOW_SAME_IP=true`; mặc định tắt để hỗ trợ thử nghiệm nhiều tab trên máy local.
+- ✅ **Báo cáo và chặn ghép cặp tạm thời**:
+  - Báo cáo sẽ ngắt phòng chat và chặn hai phiên trình duyệt vừa ghép không gặp lại nhau trong 5 phút, kể cả khi tải lại cùng tab nếu `sessionStorage` còn giữ `deviceId`.
+  - Tin nhắn bị bộ lọc nội dung từ chối sẽ ngắt phòng, ban người gửi 10 phút và chặn cặp thiết bị/IP trong bộ nhớ tiến trình.
+- ✅ **Cảnh báo và kiểm tra liên kết** – Heuristic cục bộ luôn nhận diện dấu hiệu đáng ngờ; có thể bật Google Web Risk để tra cứu phishing/malware. URL được xác nhận nguy hiểm bị chặn trước khi chuyển tiếp; API lỗi sẽ hiển thị rõ trạng thái chưa xác minh. Web Risk tùy chọn, tắt mặc định; việc tra cứu chia sẻ URL với Google.
+- ✅ **Gửi tệp trong chat** – Chia sẻ ảnh/video và tài liệu phổ biến qua Azure Blob Storage riêng tư; kiểm tra loại/dung lượng, URL tải chỉ đọc hết hạn 24 giờ, hỗ trợ lifecycle xóa file sau 7 ngày.
+- ✅ **Tuân thủ tiêu chuẩn an toàn bảo mật (CVE, OWASP, NIST, RFC)**:
+  - **OWASP ASVS v4.0 / CWE-1385:** Chống tấn công Cross-Site WebSocket Hijacking (CSWSH) qua xác thực `Origin` trong `verifyClient`.
+  - **OWASP Top 10 A03:2021 / CWE-79:** Chống XSS qua cơ chế DOM `textContent` và schema validation.
+  - **CWE-400 / CWE-770:** Giới hạn `maxPayload: 4096 bytes` và Sliding Window Rate Limiter chống tấn công DoS làm cạn kiệt bộ nhớ.
+  - **CWE-307:** Chống spam Skip qua Cooldown 30s. FIFO là chính sách công bằng theo thứ tự vào hàng đợi, không phải biện pháp chống timing attack.
+  - Chi tiết xem tại: [`docs/SECURITY_COMPLIANCE.md`](./docs/SECURITY_COMPLIANCE.md).
+- ✅ **Bộ lọc từ cấm 6 nhóm theo chuẩn pháp lý & De-obfuscation Engine**:
+  - Căn cứ **Luật An ninh mạng 2018 (Điều 8, 16, 18)**, **Nghị định 15/2020/NĐ-CP (Điều 101)**, **Bộ luật Hình sự 2015 (Điều 155, 156, 249, 251, 321)** và Tiêu chuẩn cộng đồng quốc tế.
+  - Phân loại rõ ràng 6 danh mục:
+    1. *Ma túy & chất kích thích cấm* (Cần sa, cỏ mỹ, ke kẹo, pod chill, bóng cười...).
+    2. *Xúc phạm danh dự & kỳ thị vùng miền* (Bắc kỳ chó, mọi rợ, súc vật, óc chó...).
+    3. *Cờ bạc trái phép & lừa đảo* (Tài xỉu, ku casino, go88, nạp rút...).
+    4. *Bạo lực & đe dọa tính mạng* (Chém chết, đâm chết, giết...).
+    5. *Quấy rối tình dục & khiêu dâm* (Chat sex, show hàng, lộ vú, gạ tình...).
+    6. *Ngôn từ tục tĩu, khiếm nhã*.
+  - Nhận diện các chiêu trò chèn ký tự phân tách để lách luật: `c.ầ.n  s.a`, `p-o-d  c*h*i*l*l`, `đ.ị.t  m.ẹ`, `t à i  x ỉ u`.
+  - **Hình phạt:** Buộc rời phòng tức thì (Instant Kick), cấm kết nối 10 phút cả IP lẫn thiết bị và chặn cặp với đối phương trong bộ nhớ tiến trình.
+- ✅ **Khả năng mở rộng (Scalability)** – Hỗ trợ kiến trúc Redis Pub/Sub đa node và dự phòng In-memory linh hoạt.
+- ✅ **Hàng đợi ghép cặp Redis nguyên tử** – Chia sẻ hàng đợi và số người online giữa nhiều instance; giữ chấm điểm sở thích/tâm trạng, FIFO khi bằng điểm và nới điều kiện sau thời gian chờ.
+- ✅ **Tự động kết nối lại (Exponential Backoff)** và **Ping/Pong Heartbeat** (RFC 6455) phát hiện kết nối chết.
 
-## 🗺️ Kế hoạch thực hiện
+## 🔧 Công nghệ sử dụng
 
-- [ ] Khảo sát các project tham khảo, chốt phạm vi
-- [ ] Dựng WebSocket Server cơ bản (kết nối, gửi nhận message)
-- [ ] Thiết kế và cài đặt giao thức thông điệp
-- [ ] Cài đặt hàng đợi và ghép cặp cơ bản (FIFO)
-- [ ] Xây dựng giao diện chat (Client)
-- [ ] Ghép cặp theo sở thích + nới lỏng theo thời gian chờ
-- [ ] Heartbeat, tự kết nối lại, xử lý ngắt kết nối
-- [ ] Rate limiting, Report
-- [ ] Kiểm thử chức năng và kiểm thử tải
-- [ ] Hoàn thiện báo cáo và slide
+- **Server:** Node.js + `ws` (WebSocket thuần) + Redis (tùy chọn)
+- **Client:** HTML5 + Vanilla CSS3 (Dark Mode) + Vanilla JavaScript
+- **Giao thức:** WebSocket (RFC 6455) trên TCP
+- **Tài liệu tham khảo:**
+  - [Kiến trúc hệ thống](file:///d:/WebSocket/docs/ARCHITECTURE.md)
+  - [Đặc tả giao thức thông điệp](file:///d:/WebSocket/docs/PROTOCOL.md)
+  - [Hướng dẫn Redis Pub/Sub nhiều instance](./docs/REDIS_GUIDE.md)
+  - [Chính sách an toàn & Căn cứ pháp lý bộ lọc](file:///d:/WebSocket/docs/SECURITY_COMPLIANCE.md)
+  - [Kế hoạch kiểm thử](file:///d:/WebSocket/docs/TESTING.md)
 
----
+### Redis khi triển khai nhiều instance
 
-## 📚 Kiến thức đạt được
+Đặt `USE_REDIS=true` và cấu hình `REDIS_URL` tới Redis dùng chung cho tất cả instance. Redis giữ hàng đợi ghép cặp và số người online dùng chung; Lua script thực hiện ghép cặp nguyên tử để tránh một người bị ghép vào nhiều phòng. Nếu Redis được bật nhưng chưa kết nối, thao tác tìm người sẽ báo lỗi thay vì lặng lẽ chuyển sang hàng đợi cục bộ.
 
-Sau khi hoàn thành đề tài, nhóm có thể:
+Redis giúp nhiều instance phối hợp và mở rộng tải; không đảm bảo tự thân làm một instance chạy nhanh hơn. Xem giới hạn các trạng thái còn lưu trong RAM và hướng dẫn triển khai tại [`docs/REDIS_GUIDE.md`](./docs/REDIS_GUIDE.md).
 
-* Hiểu được nguyên lý hoạt động của WebSocket.
-* Hiểu quá trình HTTP Upgrade / WebSocket Handshake.
-* Hiểu mô hình giao tiếp Full-Duplex.
-* Xây dựng WebSocket Client.
-* Xây dựng WebSocket Server.
-* Xử lý các sự kiện `open`, `message`, `close`, `error`.
-* Thiết kế giao thức thông điệp cho ứng dụng thời gian thực.
-* Xây dựng cơ chế ghép cặp và quản lý phòng chat.
-* Xử lý đồng thời nhiều kết nối, heartbeat và kết nối lại.
-* Đánh giá hiệu năng hệ thống bằng kiểm thử tải.
-* Áp dụng WebSocket vào các bài toán thực tế.
-
----
-
-## 📌 Kết luận
-
-WebSocket là một công nghệ quan trọng trong các hệ thống yêu cầu **giao tiếp thời gian thực**. Với khả năng duy trì kết nối liên tục và hỗ trợ giao tiếp hai chiều giữa Client và Server, WebSocket giúp xây dựng hiệu quả các ứng dụng như Chat Online, Game Online, Live Notification và Real-time Dashboard.
-
-Thông qua đề tài **"Xây dựng hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực sử dụng WebSocket"**, **Nhóm 9** tìm hiểu các khái niệm cơ bản, cơ chế hoạt động của WebSocket và triển khai chúng trong một ứng dụng thực tế, đồng thời phát triển thêm các tính năng như ghép cặp theo sở thích, heartbeat, kiểm soát lạm dụng và kiểm thử tải.
-
----
-
-## 👨‍💻 Thông tin nhóm
-
-**Nhóm 9**
-
-* 👑 **Dương Đình Thuận** — 2331540247 — Nhóm trưởng
-* 👨‍💻 **Nguyễn Thế Minh** — 2331540226 — Thành viên
-* 👨‍💻 **Huỳnh Thị Thanh Thảo** — 2431540240 — Thành viên
-
----
-
-⭐ **WebSocket – Nhóm 9**
+## 👥 Nhóm 9

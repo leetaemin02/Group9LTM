@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>ChatMatch – Trò chuyện & Kết nối ngẫu nhiên</title>
+  <meta name="description" content="Hệ thống ghép cặp và trò chuyện trực tuyến thời gian thực hiện đại, an toàn sử dụng WebSocket" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ═══════ Background Ambient Orbs ═══════ -->
+    <div class="ambient-glow glow-1" aria-hidden="true"></div>
+    <div class="ambient-glow glow-2" aria-hidden="true"></div>
+    <div class="ambient-glow glow-3" aria-hidden="true"></div>
+
+    <!-- ═══════ Header ═══════ -->
+    <header id="header">
+      <div class="header-left">
+        <div class="logo-badge">
+          <span class="logo-icon">💬</span>
+          <div class="logo-text">
+            <h1>ChatMatch</h1>
+            <span class="subtitle">Trò chuyện thời gian thực</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- Trạng thái kết nối WebSocket -->
+        <div id="connection-status" class="status-indicator disconnected" title="Trạng thái máy chủ">
+          <span class="status-dot"></span>
+          <span class="status-text">Đang kết nối…</span>
+        </div>
+
+        <!-- Số người online -->
+        <div id="online-count" class="online-badge" title="Số người đang trực tuyến">
+          <span class="online-pulse"></span>
+          <span class="online-icon">👥</span>
+          <span id="online-number">0</span>
+          <span class="online-label">online</span>
+        </div>
+
+        <!-- Controls: Theme & Sound -->
+        <div class="header-controls">
+          <button id="btn-theme-toggle" class="control-btn" type="button" title="Chuyển sang giao diện sáng" aria-label="Chuyển sang giao diện sáng">
+            <span class="theme-icon" aria-hidden="true">☀️</span>
+          </button>
+          <button id="btn-sound-toggle" class="control-btn" type="button" title="Bật/Tắt âm thanh hiệu ứng" aria-label="Bật tắt âm thanh">
+            <span class="sound-icon">🔔</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══════ Màn hình Đăng nhập (Lobby) ═══════ -->
+    <section id="screen-login" class="screen active">
+      <div class="login-container">
+        <div class="login-card">
+          <!-- Card Header & Badge -->
+          <div class="card-hero">
+            <div class="hero-icon-wrapper">
+              <div class="hero-icon-ring"></div>
+              <span class="hero-icon">✨</span>
+            </div>
+            <h2>Tìm bạn tâm giao</h2>
+            <p class="login-desc">Ghép cặp ngẫu nhiên 1-1 ẩn danh, an toàn và cùng chung tần số</p>
+          </div>
+
+          <!-- Nhập biệt danh & Avatar Picker -->
+          <div class="form-group">
+            <div class="label-row">
+              <label for="input-nickname">Biệt danh của bạn <span class="required">*</span></label>
+              <button id="btn-random-name" type="button" class="btn-text-action" title="Gợi ý một biệt danh ngẫu nhiên">
+                🎲 Tên ngẫu nhiên
+              </button>
+            </div>
+            <div class="nickname-input-wrapper">
+              <span id="user-avatar-preview" class="avatar-preview-badge" title="Avatar hiển thị của bạn">🦊</span>
+              <input
+                type="text"
+                id="input-nickname"
+                placeholder="Ví dụ: Cáo Mộng Mơ, Cú Đêm, Phi Hành Gia…"
+                maxlength="30"
+                autocomplete="off"
+                autofocus
+              />
+            </div>
+
+            <!-- Avatar Quick Select -->
+            <div class="avatar-quick-select" id="avatar-selector">
+              <span class="avatar-select-label">Chọn biểu tượng:</span>
+              <div class="avatar-chips-list">
+                <button type="button" class="avatar-chip active" data-avatar="🦊">🦊</button>
+                <button type="button" class="avatar-chip" data-avatar="🐼">🐼</button>
+                <button type="button" class="avatar-chip" data-avatar="🐱">🐱</button>
+                <button type="button" class="avatar-chip" data-avatar="🚀">🚀</button>
+                <button type="button" class="avatar-chip" data-avatar="☕">☕</button>
+                <button type="button" class="avatar-chip" data-avatar="🎮">🎮</button>
+                <button type="button" class="avatar-chip" data-avatar="🎧">🎧</button>
+                <button type="button" class="avatar-chip" data-avatar="🌟">🌟</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tâm trạng hôm nay -->
+          <div class="form-group">
+            <div class="label-row">
+              <label>Tâm trạng hôm nay</label>
+              <span class="optional">ghép người cùng tần số</span>
+            </div>
+            <div id="moods-container" class="moods-grid">
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="ngau_nhien" checked />
+                <span class="mood-content">
+                  <span class="mood-emoji">☕</span>
+                  <span class="mood-title">Tùy duyên</span>
+                </span>
+              </label>
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="tam_su" />
+                <span class="mood-content">
+                  <span class="mood-emoji">🌙</span>
+                  <span class="mood-title">Muốn tâm sự</span>
+                </span>
+              </label>
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="vui_ve" />
+                <span class="mood-content">
+                  <span class="mood-emoji">☀️</span>
+                  <span class="mood-title">Vui vẻ, tích cực</span>
+                </span>
+              </label>
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="tim_ban_game" />
+                <span class="mood-content">
+                  <span class="mood-emoji">🎮</span>
+                  <span class="mood-title">Tìm bạn game</span>
+                </span>
+              </label>
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="hoc_tap" />
+                <span class="mood-content">
+                  <span class="mood-emoji">📚</span>
+                  <span class="mood-title">Cùng học tập</span>
+                </span>
+              </label>
+              <label class="mood-chip">
+                <input type="radio" name="mood" value="chan_nan" />
+                <span class="mood-content">
+                  <span class="mood-emoji">🌧️</span>
+                  <span class="mood-title">Cần lắng nghe</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Sở thích -->
+          <div class="form-group">
+            <div class="label-row">
+              <label>Chủ đề quan tâm</label>
+              <span class="optional" id="interests-counter">Tối đa 5 (đã chọn: 0/5)</span>
+            </div>
+            <div id="interests-container" class="interests-grid">
+              <label class="interest-chip"><input type="checkbox" value="âm nhạc" /><span>🎵 Âm nhạc</span></label>
+              <label class="interest-chip"><input type="checkbox" value="phim ảnh" /><span>🎬 Phim ảnh</span></label>
+              <label class="interest-chip"><input type="checkbox" value="game" /><span>🎮 Game</span></label>
+              <label class="interest-chip"><input type="checkbox" value="thể thao" /><span>⚽ Thể thao</span></label>
+              <label class="interest-chip"><input type="checkbox" value="công nghệ" /><span>💻 Công nghệ</span></label>
+              <label class="interest-chip"><input type="checkbox" value="du lịch" /><span>✈️ Du lịch</span></label>
+              <label class="interest-chip"><input type="checkbox" value="ẩm thực" /><span>🍜 Ẩm thực</span></label>
+              <label class="interest-chip"><input type="checkbox" value="sách" /><span>📚 Sách</span></label>
+              <label class="interest-chip"><input type="checkbox" value="nghệ thuật" /><span>🎨 Nghệ thuật</span></label>
+              <label class="interest-chip"><input type="checkbox" value="lập trình" /><span>👨‍💻 Lập trình</span></label>
+            </div>
+          </div>
+
+          <!-- Các nút hành động chính -->
+          <div class="login-actions-row">
+            <button id="btn-start" class="btn btn-primary btn-large btn-glow">
+              <span class="btn-icon">🚀</span>
+              <span class="btn-text">Bắt đầu ghép cặp</span>
+            </button>
+            <button id="btn-start-solo" class="btn btn-solo btn-large" type="button" title="Tâm sự giãi bày hoặc chơi cờ Caro giải trí một mình cùng Trợ lý Lumi">
+              <span class="solo-badge-tag">24/7 AI</span>
+              <span class="btn-text">Tâm sự cùng Lumi (Solo AI)</span>
+            </button>
+          </div>
+
+          <!-- Footer ghi chú quyền riêng tư -->
+          <div class="card-footer-note">
+            🔒 Hoàn toàn ẩn danh • Không cần tài khoản • Tôn trọng người khác
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════ Màn hình Chờ ghép cặp ═══════ -->
+    <section id="screen-waiting" class="screen">
+      <div class="waiting-card">
+        <!-- Radar Animation -->
+        <div class="waiting-animation">
+          <div class="pulse-ring ring-1"></div>
+          <div class="pulse-ring ring-2"></div>
+          <div class="pulse-ring ring-3"></div>
+          <div class="radar-sweep"></div>
+          <div class="waiting-icon-box">
+            <span class="waiting-icon">🔍</span>
+          </div>
+        </div>
+
+        <h2>Đang tìm người trò chuyện…</h2>
+        <p id="waiting-info" class="waiting-desc">Hệ thống đang ghép nối người có cùng tâm trạng và sở thích chung</p>
+        
+        <div class="timer-capsule">
+          <span class="timer-icon">⏳</span>
+          <span class="timer-label">Thời gian chờ:</span>
+          <span class="timer-digits"><span id="wait-time">0</span>s</span>
+        </div>
+
+        <!-- Mẹo chờ xoay vòng -->
+        <div class="waiting-fun-fact">
+          <span class="fact-icon">💡</span>
+          <span id="rotating-fact-text" class="fact-text">Mẹo: Chọn sở thích giúp cơ hội tìm thấy người cùng đam mê tăng 80%!</span>
+        </div>
+
+        <!-- Hộp gợi ý Tâm sự Solo cùng Lumi khi chờ lâu hoặc chỉ có 1 người -->
+        <div id="solo-hint-box" class="solo-hint-box hidden">
+          <div class="solo-hint-badge">✨ GỢI Ý THƯ GIÃN</div>
+          <p class="solo-hint-msg">Hiện tại phòng đang ít người... Bạn có muốn vào trò chuyện giãi bày tâm sự hoặc chơi cờ Caro giải trí một mình cùng <strong>Trợ lý Lumi</strong> không?</p>
+          <button id="btn-accept-solo" class="btn btn-solo btn-small">
+            🤖 Trò chuyện & Chơi Caro cùng Lumi
+          </button>
+        </div>
+
+        <button id="btn-cancel" class="btn btn-secondary btn-cancel-search">
+          <span class="btn-icon">✕</span> Hủy tìm kiếm
+        </button>
+      </div>
+    </section>
+
+    <!-- ═══════ Màn hình Chat ═══════ -->
+    <section id="screen-chat" class="screen">
+      <div class="chat-container">
+        <!-- Thanh thông tin đối phương -->
+        <div class="chat-header">
+          <div class="partner-info">
+            <div class="partner-avatar-wrapper">
+              <span id="partner-avatar" class="partner-avatar">👤</span>
+              <span class="partner-live-dot" title="Đang trực tuyến"></span>
+            </div>
+            <div class="partner-details">
+              <div class="partner-name-row">
+                <span id="partner-nickname" class="partner-name">Đang tải…</span>
+                <button type="button" id="bot-badge" class="bot-badge hidden" title="Nhấn để xem thông tin về Lumi">🤖 Trợ lý Lumi</button>
+                <button type="button" id="partner-mood" class="partner-mood-tag hidden" title="Nhấn để xem giải thích tâm trạng này">
+                  <span class="mood-tag-icon">💭</span>
+                  <span id="partner-mood-text" class="mood-tag-text">Lắng nghe & Thấu hiểu</span>
+                  <span class="mood-tag-info">ℹ️</span>
+                </button>
+              </div>
+              <span id="common-interests" class="common-interests"></span>
+            </div>
+          </div>
+
+          <div class="chat-actions">
+            <button id="btn-icebreaker" class="btn btn-action-icebreaker btn-small" title="Gợi ý câu hỏi mở đầu giúp câu chuyện không bị sượng">
+              <span class="action-icon">🎲</span> Phá băng
+            </button>
+            <button id="btn-minigame" class="btn btn-action-game btn-small" title="Mời đối phương chơi cờ Caro 1-1">
+              <span class="action-icon">🎮</span> Caro 1-1
+            </button>
+            <button id="btn-skip" class="btn btn-warning btn-small" title="Bỏ qua và tìm người mới (Phím tắt: Esc)">
+              <span class="action-icon">⏭️</span> Bỏ qua <kbd class="kbd-hint">Esc</kbd>
+            </button>
+            <button id="btn-report" class="btn btn-danger btn-small" title="Báo cáo người này nếu có hành vi quấy rối hoặc khiếm nhã">
+              <span class="action-icon">🚩</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Banner Câu hỏi phá băng -->
+        <div id="icebreaker-banner" class="icebreaker-banner hidden">
+          <div class="icebreaker-header">
+            <div class="icebreaker-badge">
+              <span class="icebreaker-sparkle">🎲</span> GỢI Ý MỞ ĐẦU (<span id="icebreaker-category">Chủ đề</span>)
+            </div>
+            <div class="icebreaker-tools">
+              <button id="btn-use-icebreaker" type="button" class="btn-use-icebreaker" title="Chép câu hỏi này vào ô nhập tin nhắn">
+                ✍️ Chép vào chat
+              </button>
+              <button id="btn-close-icebreaker" class="btn-close-banner" title="Đóng">✕</button>
+            </div>
+          </div>
+          <p id="icebreaker-text" class="icebreaker-text"></p>
+        </div>
+
+        <!-- Panel Minigame Cờ Caro Rộng Rãi -->
+        <div id="game-panel" class="game-panel hidden">
+          <div class="game-header">
+            <div class="game-title-group">
+              <span class="game-icon">🎮</span>
+              <div>
+                <h4>Cờ Caro 1-1</h4>
+                <span id="game-rule-hint" class="game-rule-hint">Bàn cờ 10x10 • Nối 5 ô liên tiếp để thắng</span>
+              </div>
+            </div>
+
+            <!-- Kích thước bàn cờ -->
+            <div class="game-size-controls" id="game-size-controls">
+              <span class="size-label">Kích thước:</span>
+              <button type="button" class="size-btn active" data-size="10" title="Bàn cờ 10x10 - Nối 5 ô liên tiếp thắng (Chuẩn Việt Nam)">10x10</button>
+              <button type="button" class="size-btn" data-size="8" title="Bàn cờ 8x8 - Nối 4 ô liên tiếp thắng (Chiến thuật)">8x8</button>
+              <button type="button" class="size-btn" data-size="3" title="Bàn cờ 3x3 - Nhanh (Tic-Tac-Toe)">3x3</button>
+            </div>
+
+            <button id="btn-close-game" class="btn-close-banner" title="Thu gọn bàn cờ">✕</button>
+          </div>
+
+          <div class="game-status-bar">
+            <span id="game-status-text" class="game-turn-badge">Đang chuẩn bị…</span>
+          </div>
+
+          <!-- Khu vực bàn cờ cuộn vừa vặn -->
+          <div class="board-scroll-wrapper">
+            <div id="tictactoe-board" class="tictactoe-board size-10">
+              <!-- Các ô cờ được tạo động linh hoạt bằng JS -->
+            </div>
+          </div>
+
+          <div class="game-footer">
+            <button id="btn-game-replay" class="btn btn-secondary btn-small hidden">🔄 Chơi lại ván mới</button>
+          </div>
+        </div>
+
+        <!-- Khu vực tin nhắn -->
+        <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
+          <!-- Tin nhắn sẽ được thêm động -->
+        </div>
+
+        <!-- Chỉ báo đang nhập -->
+        <div id="typing-indicator" class="typing-indicator hidden">
+          <span class="typing-avatar">💬</span>
+          <span class="typing-dots">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="typing-text">Đối phương đang nhập…</span>
+        </div>
+
+        <!-- Thanh Quick Emoji Bar -->
+        <div class="quick-emoji-bar">
+          <span class="quick-emoji-hint">Biểu cảm nhanh:</span>
+          <div class="quick-emoji-list" id="quick-emoji-list">
+            <button type="button" class="quick-emoji-btn" data-emoji="👋">👋</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="👍">👍</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="❤️">❤️</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="😂">😂</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="☕">☕</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="🎮">🎮</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="✨">✨</button>
+            <button type="button" class="quick-emoji-btn" data-emoji="🔥">🔥</button>
+          </div>
+        </div>
+
+        <!-- Ô nhập tin nhắn -->
+        <div class="chat-input-area">
+          <input
+            type="file"
+            id="input-attachment"
+            class="visually-hidden"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          />
+          <button id="btn-attachment" class="btn btn-secondary btn-attachment" type="button" title="Gửi ảnh, video hoặc tài liệu" aria-label="Gửi ảnh, video hoặc tài liệu" aria-describedby="attachment-disclaimer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 0 1 5.66 5.66l-9.9 9.9a2 2 0 0 1-2.83-2.83l9.2-9.19"/>
+            </svg>
+          </button>
+          <div class="chat-input-wrapper">
+            <textarea
+              id="input-message"
+              placeholder="Nhập tin nhắn… (Enter gửi, Shift+Enter xuống dòng)"
+              maxlength="500"
+              rows="1"
+            ></textarea>
+            <div class="input-meta">
+              <span class="char-count"><span id="char-current">0</span>/500</span>
+            </div>
+          </div>
+          <button id="btn-send" class="btn btn-primary btn-send-message" title="Gửi tin nhắn (Enter)">
+            <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+        <div id="attachment-status" class="attachment-status hidden" role="status" aria-live="polite"></div>
+        <p id="attachment-disclaimer" class="attachment-disclaimer">Tệp chỉ được chia sẻ khi Azure Defender báo sạch. Link tải dùng được trong 24 giờ; hãy chỉ mở tệp bạn mong đợi.</p>
+      </div>
+    </section>
+
+    <!-- ═══════ Modal Báo cáo ═══════ -->
+    <div id="modal-report" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header-icon danger">🚩</div>
+        <h3>Báo cáo đối phương</h3>
+        <p>Hệ thống sẽ ghi nhận báo cáo và tạm chặn ghép cặp với người này trong 5 phút:</p>
+        <textarea
+          id="input-report-reason"
+          placeholder="Nhập lý do vi phạm (quấy rối, ngôn từ khiếm nhã, spam, lừa đảo…)"
+          maxlength="200"
+          rows="3"
+        ></textarea>
+        <div class="modal-actions">
+          <button id="btn-report-cancel" class="btn btn-secondary">Hủy</button>
+          <button id="btn-report-submit" class="btn btn-danger">Gửi báo cáo & Chặn</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Lời mời chơi Game ═══════ -->
+    <div id="modal-game-invite" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header-icon primary">⚔️</div>
+        <h3>Thách đấu Minigame Caro</h3>
+        <p><b id="game-inviter-name">Đối phương</b> vừa gửi lời mời bạn cùng chơi một ván cờ Caro 3x3 để phá tan không khí ngượng ngùng!</p>
+        <div class="modal-actions">
+          <button id="btn-game-decline" class="btn btn-secondary">Để sau</button>
+          <button id="btn-game-accept" class="btn btn-primary">Chấp nhận thách đấu ⚔️</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Bị KICK do vi phạm từ ngữ khiếm nhã ═══════ -->
+    <div id="modal-kicked" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content penalty-modal">
+        <div class="penalty-icon">🚫</div>
+        <h3>Buộc rời khỏi phòng chat</h3>
+        <p id="kicked-reason">Hệ thống phát hiện bạn sử dụng ngôn từ khiếm nhã, thô tục hoặc vi phạm tiêu chuẩn cộng đồng.</p>
+        <div class="penalty-box">
+          ⚠️ Tài khoản & địa chỉ IP của bạn đã bị <b>khóa tạm thời 10 phút</b>.
+        </div>
+        <div class="modal-actions">
+          <button id="btn-kicked-ok" class="btn btn-danger">Tôi đã hiểu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Overlay Mất kết nối ═══════ -->
+    <div id="reconnect-overlay" class="reconnect-overlay hidden">
+      <div class="reconnect-card">
+        <div class="reconnect-spinner"></div>
+        <h3>Mất kết nối máy chủ</h3>
+        <p id="reconnect-desc">Đang tự động kết nối lại…</p>
+        <button id="btn-reconnect-now" class="btn btn-primary btn-small">
+          🔄 Thử lại ngay
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Thông tin Bạn chat / Lumi ═══════ -->
+    <div id="modal-partner-info" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content profile-modal">
+        <div class="profile-avatar-box">
+          <span id="modal-profile-avatar" class="profile-avatar">🤖</span>
+        </div>
+        <h3 id="modal-profile-name">Trợ lý Lumi</h3>
+        <div class="profile-badge-row">
+          <span id="modal-profile-mood-pill" class="profile-mood-pill">Lắng nghe & Thấu hiểu</span>
+        </div>
+        <p id="modal-profile-desc" class="profile-desc">
+          Lumi luôn ở đây để làm người bạn lắng nghe mọi niềm vui nỗi buồn của bạn mà không hề phán xét. Bạn có thể thoải mái tâm sự hoặc rủ Lumi chơi cờ Caro giải trí nhé!
+        </p>
+        <div class="profile-interests-box">
+          <span class="profile-label">Sở thích & Chủ đề:</span>
+          <span id="modal-profile-interests" class="profile-interests-text">Tâm sự, Lắng nghe, Cờ Caro, Thư giãn</span>
+        </div>
+        <div class="modal-actions" style="justify-content: center; margin-top: 18px;">
+          <button id="btn-close-partner-info" class="btn btn-primary" style="min-width: 160px;">Tiếp tục trò chuyện ✨</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Toast thông báo ═══════ -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
