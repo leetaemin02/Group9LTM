@@ -41,7 +41,7 @@ ChatMatch/
 │   ├── companionBot.js   # Trợ lý Lumi
 │   ├── matchmaker.js     # Hàng đợi, mood matching & anti-targeted pairing
 │   ├── roomManager.js    # Quản lý phòng chat 1-1 & Minigame Caro
-│   ├── contentFilter.js  # Bộ lọc ngôn từ thô tục, xúc phạm, chat đen
+│   ├── contentFilter.js  # Bộ lọc ngôn ngữ không phù hợp và nội dung nhạy cảm
 │   ├── icebreakers.js    # Bộ câu hỏi phá băng kết nối người lạ
 │   ├── protocol.js       # Giao thức thông điệp + schema validate
 │   ├── moderation.js     # Rate limit, report, block, ban & anti-skip
@@ -226,10 +226,10 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
 | `skip` | – | Bỏ qua, tìm người mới (hoặc chuyển từ Bot sang người thật) |
 | `report` | `reason` | Báo cáo đối phương |
 | `icebreaker` | – | Yêu cầu gợi ý câu hỏi phá băng |
-| `game_invite` | – | Mời đối phương chơi Minigame Caro 3x3 |
-| `game_accept` | – | Chấp nhận thách đấu cờ Caro |
-| `game_move` | `index` | Đánh nước đi vào ô 0-8 |
-| `game_reset` | – | Chơi lại ván cờ mới |
+| `game_invite` | `size` (10, 15 hoặc 20) | Mời đối phương chơi Caro bàn 10x10, 15x15 hoặc 20x20 |
+| `game_accept` | `size` (10, 15 hoặc 20) | Chấp nhận thách đấu cờ Caro theo kích thước lời mời |
+| `game_move` | `index` | Đánh nước đi theo chỉ số ô trên bàn đã chọn (0-399) |
+| `game_reset` | `size` (tùy chọn) | Chơi lại ván mới, có thể chọn bàn 10x10, 15x15 hoặc 20x20 |
 | `game_quit` | – | Thu gọn / thoát bàn cờ |
 
 ### Server → Client
@@ -254,13 +254,14 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
 - ✅ **Trợ lý Đồng hành Tâm sự & AI Minigame Solo (Lumi ✨)**:
   - **Giải quyết bài toán "Chỉ có 1 người dùng trực tuyến / Phòng vắng":** Người dùng không bao giờ bị đẩy ra ngoài hay phải chờ đợi đơn độc trong chán nản.
   - **Tâm sự & Giải tỏa cảm xúc:** Lắng nghe, thấu cảm, động viên ấm áp theo tâm trạng (`tam_su`, `chan_nan`, `vui_ve`, `hoc_tap`, `tim_ban_game`), chia sẻ bài tập hít thở thư giãn 4-7-8, xả stress.
-  - **Minigame Caro 3x3 1-1 với AI:** Người dùng có thể bấm "🎮 Caro 1-1" bất cứ lúc nào để so tài cờ giải trí một mình. Bot sở hữu thuật toán AI thông minh (biết chặn nước nguy hiểm, ăn nước thắng) kèm các bình luận vui vẻ.
+  - **Minigame Caro 10x10/15x15/20x20 với Lumi:** Bàn cờ nhỏ nhất là 10x10; người chơi có thể chọn thêm bàn 15x15 hoặc 20x20. Nối 5 quân liên tiếp để thắng. Bot tính nước đi bằng chiến thuật cục bộ, ưu tiên thắng, chặn đối thủ và phát triển chuỗi quân.
+  - **Trò chuyện Lumi không cần API key:** Lumi không gọi dịch vụ AI bên ngoài. Bot dò từ khóa bằng các mẫu biểu thức chính quy, chọn ngẫu nhiên câu trả lời soạn sẵn tương ứng; nếu không khớp mẫu thì dùng câu phản hồi đồng cảm mặc định. Nội dung được xử lý trực tiếp trong ứng dụng.
   - **Hiệu ứng Typing mượt mà:** Bot mô phỏng độ trễ gõ phím chân thực (0.8s - 1.8s) như một người bạn thật sự.
   - **Chuyển đổi linh hoạt:** Khi người dùng muốn tìm người thật, chỉ cần bấm nút "👥 Tìm người thật" là được đưa ngay về hàng đợi `Matchmaker`.
 - ✅ **WebSocket thuần (`ws`)** – Tuân thủ chuẩn RFC 6455, hiệu năng cao, không phụ thuộc socket.io.
 - ✅ **Ghép cặp theo Tâm trạng (Mood Matching)** – Chọn tâm trạng (Tùy duyên, Muốn tâm sự, Vui vẻ, Tìm bạn game, Cùng học tập, Cần lắng nghe) giúp kết nối những người cùng "tần số cảm xúc".
 - ✅ **Gợi ý phá băng (Icebreaker Prompts)** – Tự động đề xuất chủ đề & câu hỏi độc đáo (Hài hước, Giả định, Tâm sự, Sở thích) chỉ với 1 click, dập tan cảm giác sượng sùng, ngượng ngùng giữa 2 người lạ.
-- ✅ **Minigame 1-1 (Cờ Caro 3x3)** – Tích hợp trò chơi đối kháng trực tiếp ngay trong phòng chat giúp tương tác sinh động, tạo tiếng cười và gắn kết tự nhiên.
+- ✅ **Minigame 1-1 (Cờ Caro 10x10, 15x15 hoặc 20x20)** – Hỗ trợ bàn cờ tối thiểu 10x10; nối 5 quân liên tiếp để thắng.
 - ✅ **Chống lợi dụng Tool & Targeted Pairing**:
   - Ghép theo mức độ tương thích trước thời hạn; khi bằng điểm giữ thứ tự FIFO. Sau thời gian chờ, ghép ứng viên hợp lệ theo FIFO.
   - `Anti-Skip Spam Cooldown`: Phát hiện bot bấm skip liên tục (> 5 lần/30s) và khóa tạm 30s.
@@ -276,16 +277,16 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
   - **CWE-400 / CWE-770:** Giới hạn `maxPayload: 4096 bytes` và Sliding Window Rate Limiter chống tấn công DoS làm cạn kiệt bộ nhớ.
   - **CWE-307:** Chống spam Skip qua Cooldown 30s. FIFO là chính sách công bằng theo thứ tự vào hàng đợi, không phải biện pháp chống timing attack.
   - Chi tiết xem tại: [`docs/SECURITY_COMPLIANCE.md`](./docs/SECURITY_COMPLIANCE.md).
-- ✅ **Bộ lọc từ cấm 6 nhóm theo chuẩn pháp lý & De-obfuscation Engine**:
+- ✅ **Bộ lọc nội dung 6 nhóm theo quy định & De-obfuscation Engine**:
   - Căn cứ **Luật An ninh mạng 2018 (Điều 8, 16, 18)**, **Nghị định 15/2020/NĐ-CP (Điều 101)**, **Bộ luật Hình sự 2015 (Điều 155, 156, 249, 251, 321)** và Tiêu chuẩn cộng đồng quốc tế.
   - Phân loại rõ ràng 6 danh mục:
-    1. *Ma túy & chất kích thích cấm* (Cần sa, cỏ mỹ, ke kẹo, pod chill, bóng cười...).
-    2. *Xúc phạm danh dự & kỳ thị vùng miền* (Bắc kỳ chó, mọi rợ, súc vật, óc chó...).
-    3. *Cờ bạc trái phép & lừa đảo* (Tài xỉu, ku casino, go88, nạp rút...).
-    4. *Bạo lực & đe dọa tính mạng* (Chém chết, đâm chết, giết...).
-    5. *Quấy rối tình dục & khiêu dâm* (Chat sex, show hàng, lộ vú, gạ tình...).
-    6. *Ngôn từ tục tĩu, khiếm nhã*.
-  - Nhận diện các chiêu trò chèn ký tự phân tách để lách luật: `c.ầ.n  s.a`, `p-o-d  c*h*i*l*l`, `đ.ị.t  m.ẹ`, `t à i  x ỉ u`.
+    1. *Ma túy và chất kích thích bị kiểm soát* (ví dụ: cần sa và các chất bị cấm).
+    2. *Xúc phạm danh dự và kỳ thị vùng miền*.
+    3. *Cờ bạc trái phép và lừa đảo tài chính*.
+    4. *Bạo lực và đe dọa gây tổn hại*.
+    5. *Quấy rối và nội dung gợi dục hoặc nhạy cảm*.
+    6. *Ngôn ngữ thiếu lịch sự hoặc công kích*.
+  - Nhận diện cách viết biến đổi hoặc chèn ký tự nhằm né bộ lọc.
   - **Hình phạt:** Buộc rời phòng tức thì (Instant Kick), cấm kết nối 10 phút cả IP lẫn thiết bị và chặn cặp với đối phương trong bộ nhớ tiến trình.
 - ✅ **Khả năng mở rộng (Scalability)** – Hỗ trợ kiến trúc Redis Pub/Sub đa node và dự phòng In-memory linh hoạt.
 - ✅ **Hàng đợi ghép cặp Redis nguyên tử** – Chia sẻ hàng đợi và số người online giữa nhiều instance; giữ chấm điểm sở thích/tâm trạng, FIFO khi bằng điểm và nới điều kiện sau thời gian chờ.

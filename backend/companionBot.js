@@ -4,7 +4,7 @@
  * Đảm bảo người dùng không bao giờ bị cô độc hay bị đẩy ra ngoài khi chỉ có 1 mình:
  *   1. Lắng nghe, chia sẻ và giãi bày tâm sự chân thành theo tâm trạng của người dùng.
  *   2. Hướng dẫn các bài tập thư giãn, giải tỏa áp lực, stress.
- *   3. Chơi Minigame Cờ Caro 3x3 1-1 thư giãn đầu óc với AI thông minh, vui nhộn.
+ *   3. Chơi Minigame Cờ Caro 10x10, 15x15 hoặc 20x20 1-1 với chiến thuật tự động.
  *   4. Tự động phản hồi mượt mà với hiệu ứng typing indicator như người thật.
  */
 
@@ -31,7 +31,7 @@ const WELCOME_MESSAGES_BY_MOOD = {
   ],
   tim_ban_game: [
     'Chào game thủ! Lumi cũng cực kỳ mê game đây 🎮 Trong lúc chờ thêm người vào phòng, bạn có muốn so tài một ván Cờ Caro 1-1 với Lumi để khởi động và thư giãn đầu óc không? Bấm nút "🎮 Caro 1-1" ở trên nha!',
-    'Chào bạn! Đồng đội game đây rồi! Nếu muốn giải trí nhanh một ván cờ Caro 3x3 để xả stress, bấm nút "🎮 Caro 1-1" ngay nhé, Lumi sẵn sàng nghênh chiến!',
+    'Chào bạn! Đồng đội game đây rồi! Nếu muốn giải trí một ván cờ Caro, bấm nút "🎮 Caro 1-1" ngay nhé, Lumi sẵn sàng nghênh chiến!',
   ],
   hoc_tap: [
     'Chào bạn! Cùng nhau nạp năng lượng học tập và làm việc thật tập trung nào 📚 Hôm nay bạn đang ôn tập môn gì hay làm dự án nào thế? Cần một chút âm nhạc hay trò chuyện thư giãn cứ bảo Lumi nha!',
@@ -207,7 +207,7 @@ class CompanionBot {
   }
 
   /**
-   * Tính toán nước cờ Caro AI thông minh cho mọi kích thước bàn cờ (10x10, 8x8, 3x3)
+   * Tính toán nước cờ Caro cho bàn cờ từ 10x10 đến 20x20
    * @param {(string|null)[]} board - Mảng các ô cờ
    * @param {string} botSymbol - 'X' hoặc 'O'
    * @param {string} playerSymbol - 'X' hoặc 'O'
@@ -216,7 +216,7 @@ class CompanionBot {
   computeMove(board, botSymbol, playerSymbol) {
     const totalCells = board.length;
     const size = Math.round(Math.sqrt(totalCells));
-    const winLength = size >= 10 ? 5 : (size >= 7 ? 4 : 3);
+    const winLength = 5;
 
     const availableMoves = [];
     for (let i = 0; i < totalCells; i++) {
@@ -224,39 +224,7 @@ class CompanionBot {
     }
     if (availableMoves.length === 0) return -1;
 
-    // Nếu là bàn 3x3 kinh điển, dùng bộ quy tắc 3x3 nhanh
-    if (size === 3) {
-      const WINNING_LINES = [
-        [0, 1, 2], [3, 4, 5], [6, 7, 8],
-        [0, 3, 6], [1, 4, 7], [2, 5, 8],
-        [0, 4, 8], [2, 4, 6]
-      ];
-
-      // 1. Thắng ngay nếu có nước
-      for (const line of WINNING_LINES) {
-        const values = line.map(idx => board[idx]);
-        if (values.filter(v => v === botSymbol).length === 2 && values.filter(v => v === null).length === 1) {
-          return line.find(idx => board[idx] === null);
-        }
-      }
-
-      // 2. Chặn người chơi thắng
-      for (const line of WINNING_LINES) {
-        const values = line.map(idx => board[idx]);
-        if (values.filter(v => v === playerSymbol).length === 2 && values.filter(v => v === null).length === 1) {
-          return line.find(idx => board[idx] === null);
-        }
-      }
-
-      if (board[4] === null) return 4;
-      const corners = [0, 2, 6, 8].filter(idx => board[idx] === null);
-      if (corners.length > 0 && Math.random() < 0.7) {
-        return corners[Math.floor(Math.random() * corners.length)];
-      }
-      return availableMoves[Math.floor(Math.random() * availableMoves.length)];
-    }
-
-    // ── Bàn cờ lớn (8x8 hoặc 10x10): Chiến thuật Caro thông minh ──
+    // ── Chiến thuật cho bàn cờ Caro kích thước lớn ──
     const DIRECTIONS = [
       [0, 1],   // Ngang
       [1, 0],   // Dọc

@@ -56,7 +56,7 @@ const CLIENT_TYPES = Object.freeze({
   ICEBREAKER:  'icebreaker',  // Yêu cầu câu hỏi phá băng mở đầu
   GAME_INVITE: 'game_invite', // Mời chơi minigame 1-1
   GAME_ACCEPT: 'game_accept', // Chấp nhận lời mời chơi game
-  GAME_MOVE:   'game_move',   // Đánh nước cờ { index: 0..8 }
+  GAME_MOVE:   'game_move',   // Đánh nước cờ { index: 0..399 }
   GAME_RESET:  'game_reset',  // Chơi lại ván mới
   GAME_QUIT:   'game_quit',   // Đóng bàn cờ
 });
@@ -284,21 +284,28 @@ function validatePayload(type, payload) {
 
     // ── game_move ────────────────────────────────────────
     case CLIENT_TYPES.GAME_MOVE: {
-      if (typeof payload.index !== 'number' || !Number.isInteger(payload.index) || payload.index < 0 || payload.index >= 100) {
-        return { ok: false, error: 'Ô đánh không hợp lệ (phải từ 0 đến 99)' };
+      if (typeof payload.index !== 'number' || !Number.isInteger(payload.index) || payload.index < 0 || payload.index >= 400) {
+        return { ok: false, error: 'Ô đánh không hợp lệ (phải từ 0 đến 399)' };
       }
       return { ok: true, sanitized: { index: payload.index } };
     }
 
-    // ── find_match, start_solo, cancel, skip, icebreaker, game_invite, game_accept, game_reset, game_quit
+    case CLIENT_TYPES.GAME_INVITE:
+    case CLIENT_TYPES.GAME_ACCEPT:
+    case CLIENT_TYPES.GAME_RESET: {
+      if (payload.size === undefined) return { ok: true, sanitized: {} };
+      if (![10, 15, 20].includes(payload.size)) {
+        return { ok: false, error: 'Kích thước bàn cờ chỉ hỗ trợ 10x10, 15x15 hoặc 20x20' };
+      }
+      return { ok: true, sanitized: { size: payload.size } };
+    }
+
+    // ── find_match, start_solo, cancel, skip, icebreaker, game_quit
     case CLIENT_TYPES.FIND_MATCH:
     case CLIENT_TYPES.START_SOLO:
     case CLIENT_TYPES.CANCEL:
     case CLIENT_TYPES.SKIP:
     case CLIENT_TYPES.ICEBREAKER:
-    case CLIENT_TYPES.GAME_INVITE:
-    case CLIENT_TYPES.GAME_ACCEPT:
-    case CLIENT_TYPES.GAME_RESET:
     case CLIENT_TYPES.GAME_QUIT:
       return { ok: true, sanitized: {} };
 
