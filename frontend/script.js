@@ -1423,6 +1423,13 @@ el.btnCancel.addEventListener('click', () => {
   switchScreen('login');
 });
 
+// ── Che dấu từ tục tĩu phía client cho người gửi ───
+function maskProfanityClient(text) {
+  if (!text) return text;
+  const profanityPattern = /\b(đ[iịkịt]*t|d[iịkịt]*t|d[cç]m|đ[cç]m|vcl|v[cç][l|z]|đ[eẹ]o|d[eẹ]o|clmm|clgt|c[ặaă]c|k[ặaă]c|cac|cu|d[áa]i|b[uồi]+i|l[ồo]n|l[ôồ]n|fuck|bitch|shit)\b/gi;
+  return text.replace(profanityPattern, (match) => '*'.repeat(match.length));
+}
+
 // ── Gửi tin nhắn ───────────────────────────────────
 function sendMessage() {
   const text = el.inputMessage.value.trim();
@@ -1431,8 +1438,9 @@ function sendMessage() {
   // Gửi lên server
   send('message', { text });
 
-  // Hiển thị ở phía mình
-  appendMessage(text, 'sent', new Date().toISOString());
+  // Hiển thị ở phía mình đã được che dấu sao
+  const displayText = maskProfanityClient(text);
+  appendMessage(displayText, 'sent', new Date().toISOString());
 
   // Âm thanh gửi tin
   playTone(400, 'sine', 0.06, 0.06);
@@ -1443,7 +1451,7 @@ function sendMessage() {
 
   // Reset typing
   sendTypingState(false);
-
+  
   // Auto-resize
   el.inputMessage.style.height = 'auto';
   el.inputMessage.focus();

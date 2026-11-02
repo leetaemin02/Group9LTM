@@ -28,7 +28,7 @@ const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
 const Moderation = require('./moderation');
 const RedisManager = require('./redisManager');
-const { checkContent } = require('./contentFilter');
+const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
 const { analyzeLinkSafety } = require('./linkSafety');
 const { checkMessageLinks } = require('./webRisk');
 const {
@@ -69,13 +69,13 @@ const ipConnections = new Map(); // ip -> count
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.js':   'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.svg':  'image/svg+xml',
-  '.ico':  'image/x-icon',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
   '.avif': 'image/avif',
 };
 
@@ -228,6 +228,53 @@ wss.on('error', (err) => {
  */
 const clients = new Map();
 const pendingChatMessages = new Map();
+
+// Lưu số lần cảnh cáo theo thiết bị trong thời gian server hoạt động
+const violationStrikes = new Map();
+
+const MAX_VIOLATION_STRIKES = 3;
+const STRIKE_TTL_MS = 24 * 60 * 60 * 1000; // 24 giờ
+
+function getStrikeKey(client) {
+  // deviceId được cung cấp từ client, chỉ dùng tạm cho bản thử nghiệm
+  if (!client.deviceId) return null;
+
+  return `device:${client.deviceId}`;
+}
+
+function addViolationStrike(client) {
+  const key = getStrikeKey(client);
+
+  // Nếu không có deviceId, dùng bộ đếm trên kết nối hiện tại
+  if (!key) {
+    client.warningCount = (client.warningCount || 0) + 1;
+    return client.warningCount;
+  }
+
+  const now = Date.now();
+  const previous = violationStrikes.get(key);
+
+  const count = previous && previous.expiresAt > now
+    ? previous.count + 1
+    : 1;
+
+  violationStrikes.set(key, {
+    count,
+    expiresAt: now + STRIKE_TTL_MS,
+  });
+
+  return count;
+}
+
+function clearViolationStrikes(client) {
+  const key = getStrikeKey(client);
+
+  if (key) {
+    violationStrikes.delete(key);
+  }
+
+  client.warningCount = 0;
+}
 
 // ─── Khởi tạo modules ─────────────────────────────────────────────────────
 
@@ -448,6 +495,7 @@ const messageHandlers = {
     client.interests = payload.interests;
     client.mood = payload.mood || 'ngau_nhien';
     client.deviceId = payload.deviceId || null;
+    client.warningCount = client.warningCount || 0; // đếm số lần cảnh cáo vi phạm
     console.log(`[Server] Join: ${payload.nickname} (${clientId}), deviceId=${client.deviceId}, mood=${client.mood}, interests=[${payload.interests.join(', ')}]`);
   },
 
@@ -531,35 +579,66 @@ const messageHandlers = {
       return;
     }
 
-    // 2. Kiểm tra bộ lọc từ ngữ khiếm nhã, thô tục, xúc phạm, chat đen
+    // 2. Kiểm tra bộ lọc nội dung phân tầng 4 cấp độ
     const filterResult = checkContent(payload.text);
     if (filterResult.isViolation) {
-      console.warn(`[Server] 🚫 Vi phạm nội dung cấm: ${client.nickname} (${clientId}) từ IP ${client.clientIp} - Từ ngữ: "${filterResult.matched}"`);
-
-      // Cấm tạm thời 10 phút cả ClientID lẫn IP
-      const banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
-      if (redisManager.isConnected) {
-        redisManager.addBlock(clientId, client.clientIp, 600);
+      // ════════ TẦNG 1: Tục tĩu nhẹ (PROFANITY) -> Che dấu sao, cho gửi tiếp ════════
+      if (filterResult.action === MODERATION_ACTIONS.MASK) {
+        payload.text = maskProfanity(payload.text);
       }
-
-      // Chặn cặp trong bộ nhớ tiến trình để người bị hại không gặp lại người vi phạm.
-      const partnerId = roomManager.getPartnerId(clientId);
-      if (partnerId) {
-        const partner = clients.get(partnerId);
-        if (partner) {
-          moderation.addPermanentBlock(partner, client);
-          partner.state = 'CONNECTED';
+      // ════════ TẦNG 2: Kể chuyện nhạy cảm / bạo lực -> Chặn tin, nhắc nhở sửa từ (Không ban) ════════
+      else if (filterResult.action === MODERATION_ACTIONS.BLOCK_WARN) {
+        sendTo(clientId, serverMsg.error(
+          'MESSAGE_BLOCKED',
+          `Tin nhắn của bạn chứa từ ngữ nhạy cảm ("${filterResult.matched}"). Vui lòng diễn đạt lại câu chuyện để tiếp tục trò chuyện nhé!`
+        ));
+        return; // Dừng lại, không gửi cho đối phương
+      }
+      // ════════ TẦNG 3: Xúc phạm danh dự / Gạ tình 18+ -> Cảnh cáo 3 lần mới ban ════════
+      else if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
+        const strikeCount = addViolationStrike(client)
+        if (strikeCount < MAX_VIOLATION_STRIKES) {
+          // Chưa đủ 3 lần -> Chặn tin nhắn + Cảnh cáo
+          sendTo(clientId, serverMsg.error(
+            'VIOLATION_WARNING',
+            `Cảnh báo (${strikeCount}/${MAX_VIOLATION_STRIKES}): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Tái phạm 3 lần bạn sẽ bị cấm 10 phút!`
+          ));
+          return;
         }
-        notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị hệ thống buộc rời khỏi phòng do vi phạm tiêu chuẩn cộng đồng (ngôn từ khiếm nhã).');
+        // Đã vi phạm lần thứ 3 -> Ban 10 phút & Kick
+        console.warn(`[Server] 🚫 Tái phạm 3 lần: ${client.nickname} (${clientId}) - Lý do: ${filterResult.category}`);
+        const banExpiresAt = moderation.ban(clientId, client.clientIp, `Tái phạm 3 lần: ${filterResult.category}`);
+        const partnerId = roomManager.getPartnerId(clientId);
+        if (partnerId) {
+          notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị hệ thống buộc rời phòng do tái phạm tiêu chuẩn cộng đồng nhiều lần.');
+        }
+        sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm tiêu chuẩn cộng đồng 3 lần.', banExpiresAt));
+        roomManager.removeClient(clientId);
+        client.state = 'CONNECTED';
+        clearViolationStrikes(client); // Reset sau khi ban
+        return;
       }
-
-      // Thông báo bị kick ngay lập tức cho người vi phạm
-      sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
-
-      // Xóa phòng chat
-      roomManager.removeClient(clientId);
-      client.state = 'CONNECTED';
-      return;
+      // ════════ TẦNG 4: Ma túy, Cờ bạc lừa đảo -> Chặn ngay + Ban 10 phút lập tức ════════
+      else if (filterResult.action === MODERATION_ACTIONS.INSTANT_BAN) {
+        console.warn(`[Server] 🚫 Vi phạm nghiêm trọng: ${client.nickname} (${clientId}) - ${filterResult.reason}`);
+        const banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
+        if (redisManager.isConnected) {
+          redisManager.addBlock(clientId, client.clientIp, 600);
+        }
+        const partnerId = roomManager.getPartnerId(clientId);
+        if (partnerId) {
+          const partner = clients.get(partnerId);
+          if (partner) {
+            moderation.addPermanentBlock(partner, client);
+            partner.state = 'CONNECTED';
+          }
+          notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị buộc rời khỏi phòng do vi phạm nghiêm trọng tiêu chuẩn an toàn.');
+        }
+        sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
+        roomManager.removeClient(clientId);
+        client.state = 'CONNECTED';
+        return;
+      }
     }
 
     // Kiểm tra nếu đang ở phòng trò chuyện cùng Bạn Đồng Hành Lumi

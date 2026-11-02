@@ -22,6 +22,14 @@ const VIOLATION_CATEGORIES = {
   SEXUAL_HARASSMENT: 'Quấy rối tình dục, gạ gẫm 18+, chat đen, mại dâm (Điều 8 Luật An ninh mạng)',
 };
 
+// các cấp độ xử lý tương ứng 4 tầng
+const MODERATION_ACTIONS = {
+  MASK: 'MASK', // tầng 1 che dấu '*' và cho gửi đi
+  BLOCK_WARN: 'BLOCK_WARN', // tầng 2: chặn tin + Nhắc nhở sửa từ (không ban, bạo lực kể chuyện)
+  STRIKE_BAN: 'STRIKE_BAN', // tầng 3: chặn tin + cảnh báo 3 lần mới ban ( xúc phạm, gạ tình 18+ )
+  INSTANT_BAN: 'INSTANT_BAN', //tầng 4: chặn tin + ban ngay lập tức 10 phút ( ma túy, cờ bạc, lừa đảo)
+};
+
 // ─── 2. DANH MỤC PATTERNS THEO CHUẨN TỪNG NHÓM ────────────────────────────
 const BANNED_PATTERNS = [
   // ── Nhóm A: Xúc phạm danh dự, miệt thị vùng miền, kỳ thị nhân phẩm ──
@@ -45,7 +53,7 @@ const BANNED_PATTERNS = [
   // ── Nhóm D: Bạo lực, khủng bố, tự tử, đe dọa giết người ──
   {
     category: VIOLATION_CATEGORIES.VIOLENCE_THREAT,
-    pattern: /\b(gi[ếê]t\s*ng[ườu]i|ch[éê]m\s*ch[ếê]t|đ[âa]m\s*ch[ếê]t|gi[ếê]t\s*c[ảa]\s*nh[àa]|c[ắa]t\s*c[ổo]|b[ắa]n\s*ch[ếê]t|t[ựu]\s*t[ửu]|t[ựu]\s*s[áa]t|t[ựu]\s*h[ạa]i|r[ạa]ch\s*tay|nh[ảa]y\s*c[ầa]u|kh[ủu]ng\s*b[ốo]|đ[ặa]t\s*bom|bom\s*x[ăa]ng)\b/i,
+    pattern: /(giết\s*người|chém\s*chết|đâm\s*chết|giết\s*cả\s*nhà|cắt\s*cổ|bắn\s*chết|tự\s*tử|tự\s*sát|tự\s*hại|rạch\s*tay|nhảy\s*cầu|khủng\s*bố|đặt\s*bom|bom\s*xăng)/i,
   },
 
   // ── Nhóm E: Quấy rối tình dục, chat đen 18+ ──
@@ -60,6 +68,7 @@ const BANNED_PATTERNS = [
     pattern: /\b(đ[iịkịt]*t|d[iịkịt]*t|d[cç]m|đ[cç]m|đ[m|k]|d[m|k]|đ[eẹ]ch|vcl|v[cç][l|z]|đ[eẹ]o|d[eẹ]o|đ[b|v]|clmm|clgt|đ[iị]t\s*m[ẹe]|d[iị]t\s*m[ẹe]|đ[uụ]\s*m[ẹe]|d[uụ]\s*m[ẹe]|dume|đume|đụ\s*má|dụ\s*má|c[ặaă]c|k[ặaă]c|cu|d[áa]i|b[uồi]+i|l[ồo]n|l[ôồ]n|b[ưướ]m|đ[ỹy]|ph[oò]|ch[óo]\s*đ[eẻ]|ch[óo]\s*m[áa]|m[ẹe]\s*m[àa]y|b[ốo]\s*m[àa]y|fuck|fucker|fucking|bitch|bastard|asshole|dick|pussy|cunt|slut|whore|nigger|nigga|cock|blowjob|anal\s*sex)\b/i,
   },
 ];
+
 
 // ─── 3. TỪ KHÓA CẤM SUBSTRING (CHỐNG LÁCH LUẬT DẤU CHẤM, GẠCH, KHOẢNG TRẮNG) ──────
 const STRICT_SUBSTRINGS = [
@@ -109,52 +118,150 @@ const STRICT_SUBSTRINGS = [
   { category: VIOLATION_CATEGORIES.PROFANITY, pattern: /cunt/i },
 ];
 
-/**
- * Kiểm tra nội dung tin nhắn có chứa từ ngữ vi phạm không.
- * @param {string} text
- * @returns {{ ok: boolean, isViolation: boolean, matched: string | null, reason: string | null, category: string | null }}
- */
-function checkContent(text) {
-  if (!text || typeof text !== 'string') {
-    return { ok: true, isViolation: false, matched: null, reason: null, category: null };
-  }
+//json không nhận diện đúng chữ dấu tiếng việt
+const LETTER_OR_NUMBER = /[\p{L}\p{N}_]/u;
+const ACTION_PRIORITY = {
+  [MODERATION_ACTIONS.MASK]: 1,
+  [MODERATION_ACTIONS.BLOCK_WARN]: 2,
+  [MODERATION_ACTIONS.STRIKE_BAN]: 3,
+  [MODERATION_ACTIONS.INSTANT_BAN]: 4,
+};
 
-  // 1. Quét chuỗi nguyên bản
+function getActionByCategory(category) {
+  switch (category) {
+    case VIOLATION_CATEGORIES.PROFANITY: return MODERATION_ACTIONS.MASK;
+    case VIOLATION_CATEGORIES.VIOLENCE_THREAT: return MODERATION_ACTIONS.BLOCK_WARN;
+    case VIOLATION_CATEGORIES.INSULT_HATE:
+    case VIOLATION_CATEGORIES.SEXUAL_HARASSMENT: return MODERATION_ACTIONS.STRIKE_BAN;
+    case VIOLATION_CATEGORIES.DRUGS_NARCOTICS:
+    case VIOLATION_CATEGORIES.GAMBLING_FRAUD: return MODERATION_ACTIONS.INSTANT_BAN;
+    default: return MODERATION_ACTIONS.BLOCK_WARN;
+  }
+}
+
+function isBoundary(text, start, end) {
+  const before = start > 0 ? text[start - 1] : '';
+  const after = end < text.length ? text[end] : '';
+  return (!before || !LETTER_OR_NUMBER.test(before)) &&
+    (!after || !LETTER_OR_NUMBER.test(after));
+}
+
+// Giữ ánh xạ chỉ số để che đúng cả dấu chấm/khoảng trắng trong từ bị lách.
+function compactWithOffsets(text) {
+  let compact = '';
+  const offsets = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/[\p{L}\p{N}]/u.test(ch)) {
+      compact += ch.toLowerCase();
+      offsets.push(i);
+    } else if (/[\p{M}\u200B-\u200D\uFEFF]/u.test(ch)) {
+      // Combining marks are preserved to avoid turning unrelated words into matches.
+      if (/[\p{M}]/u.test(ch)) {
+        compact += ch;
+        offsets.push(i);
+      }
+    }
+  }
+  return { compact, offsets };
+}
+
+function scan(text) {
+  const found = [];
+  const add = (category, start, end, obfuscated) => {
+    if (!isBoundary(text, start, end)) return;
+    if (found.some(v => v.category === category && v.start === start && v.end === end)) return;
+    found.push({
+      category,
+      start,
+      end,
+      matched: text.slice(start, end),
+      action: getActionByCategory(category),
+      obfuscated,
+    });
+  };
+
   for (const item of BANNED_PATTERNS) {
-    const match = text.match(item.pattern);
-    if (match) {
-      return {
-        ok: false,
-        isViolation: true,
-        matched: match[0],
-        category: item.category,
-        reason: `Vi phạm tiêu chuẩn an toàn: ${item.category}`,
-      };
+    const flags = item.pattern.flags.replace(/g/g, '') + 'gu';
+    const regex = new RegExp(item.pattern.source, [...new Set(flags)].join(''));
+    for (const match of text.matchAll(regex)) {
+      add(item.category, match.index, match.index + match[0].length, false);
     }
   }
 
-  // 2. Quét chuỗi chuẩn hóa (loại bỏ ký tự phân tách lách luật: ., -, _, *, @, $, khoảng trắng)
-  const deObfuscated = text.toLowerCase().replace(/[\.\-_\*@\$\s]/g, '');
+  const { compact, offsets } = compactWithOffsets(text);
   for (const item of STRICT_SUBSTRINGS) {
-    const match = deObfuscated.match(item.pattern);
-    if (match) {
-      return {
-        ok: false,
-        isViolation: true,
-        matched: match[0],
-        category: item.category,
-        reason: `Cố tình lách bộ lọc: ${item.category}`,
-      };
+    const flags = item.pattern.flags.replace(/g/g, '') + 'g';
+    const regex = new RegExp(item.pattern.source, flags);
+    for (const match of compact.matchAll(regex)) {
+      const start = offsets[match.index];
+      const end = offsets[match.index + match[0].length - 1] + 1;
+      if (start !== undefined && end !== undefined) {
+        add(item.category, start, end, true);
+      }
     }
   }
 
-  return { ok: true, isViolation: false, matched: null, reason: null, category: null };
+  return found.sort(
+    (a, b) => ACTION_PRIORITY[b.action] - ACTION_PRIORITY[a.action] || a.start - b.start
+  );
+}
+
+function checkContent(text) {
+  const clean = {
+    ok: true,
+    isViolation: false,
+    matched: null,
+    reason: null,
+    category: null,
+    action: null,
+    matches: [],
+  };
+
+  if (typeof text !== 'string' || text.length === 0) return clean;
+
+  const matches = scan(text);
+  if (!matches.length) return clean;
+
+  const top = matches[0];
+
+  return {
+    ok: top.action === MODERATION_ACTIONS.MASK,
+    isViolation: true,
+    matched: top.matched,
+    reason: `${top.obfuscated ? 'Nghi vấn lách bộ lọc' : 'Vi phạm'}: ${top.category}`,
+    category: top.category,
+    action: top.action,
+    matches,
+  };
+}
+
+function maskProfanity(text) {
+  if (typeof text !== 'string' || !text.length) return text;
+
+  const spans = scan(text)
+    .filter(match => match.category === VIOLATION_CATEGORIES.PROFANITY)
+    .sort((a, b) => a.start - b.start);
+
+  if (!spans.length) return text;
+
+  const units = text.split('');
+
+  for (const { start, end } of spans) {
+    for (let i = start; i < end; i++) {
+      if (!/\s/u.test(units[i])) units[i] = '*';
+    }
+  }
+
+  return units.join('');
 }
 
 module.exports = {
   VIOLATION_CATEGORIES,
+  MODERATION_ACTIONS,
   BANNED_PATTERNS,
   STRICT_SUBSTRINGS,
   checkContent,
+  maskProfanity,
 };
 
