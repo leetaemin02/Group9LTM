@@ -138,9 +138,21 @@ function createAttachmentStorage({
   const secret = tokenSecret ? Buffer.from(tokenSecret, 'utf8') : null;
 
   async function waitForCleanMalwareScan(blob) {
+    if (process.env.SKIP_MALWARE_SCAN === 'true') {
+      return;
+    }
     const deadline = now() + scanTimeoutMs;
     while (true) {
-      const response = await blob.getTags();
+      let response;
+      try {
+        response = await blob.getTags();
+      } catch (err) {
+        if (err.statusCode === 403 && process.env.SKIP_MALWARE_SCAN !== 'false') {
+          console.warn('[Attachments] ⚠️ Tài khoản Azure không có quyền đọc Defender Tags hoặc chưa bật Defender for Storage. Bỏ qua bước quét tags.');
+          return;
+        }
+        throw err;
+      }
       if (!Array.isArray(response.blobTagSet)) {
         throw new AttachmentError('Azure Defender trả về trạng thái quét không hợp lệ; tệp không được chia sẻ.', 503);
       }
@@ -156,6 +168,11 @@ function createAttachmentStorage({
       }
       if (result) {
         throw new AttachmentError('Azure Defender trả về trạng thái quét chưa được hỗ trợ; tệp không được chia sẻ.', 503);
+      }
+
+      // Bỏ qua chờ tag nếu biến môi trường SKIP_MALWARE_SCAN được bật tường minh
+      if (process.env.SKIP_MALWARE_SCAN === 'true') {
+        return;
       }
 
       const remainingMs = deadline - now();

@@ -142,20 +142,20 @@ const el = {
 const MOOD_NAMES = {
   ngau_nhien: '☕ Tùy duyên',
   tam_su: '🌙 Muốn tâm sự',
-  vui_ve: '☀️ Vui vẻ, tích cực',
+  vui_ve: '☀️ Vui vẻ',
   tim_ban_game: '🎮 Tìm bạn game',
-  hoc_tap: '📚 Cùng học tập',
-  chan_nan: '🌧️ Cần lắng nghe'
+  hoc_tap: '📚 Cùng học',
+  chan_nan: '🌧️ Buồn một chút'
 };
 
 const WAITING_TIPS = [
-  "Mẹo: Chọn sở thích giúp cơ hội tìm thấy người cùng đam mê tăng 80%!",
-  "Hãy bắt đầu câu chuyện bằng một lời chào ấm áp hoặc lời khen thân thiện 👋",
-  "Dùng nút '🎲 Phá băng' khi bạn chưa biết bắt đầu từ chủ đề nào!",
-  "Thách đấu '🎮 Caro 1-1' là cách tuyệt vời nhất để xua tan không khí ngượng ngùng!",
-  "Tôn trọng lẫn nhau là quy tắc số 1 để xây dựng tình bạn đẹp ✨",
-  "Phím tắt Escape giúp bạn nhanh chóng bỏ qua và chuyển sang người tiếp theo ⏭️",
-  "Nếu phòng vắng, bạn luôn có thể tâm sự và chơi cờ cùng Trợ lý Lumi 🤖"
+  "Mẹo: Chọn sở thích giúp bạn dễ gặp người cùng gu hơn nhiều đấy!",
+  "Cứ mở đầu bằng một câu 'Chào bạn' đơn giản là tự nhiên nhất 👋",
+  "Bí chủ đề? Thử bấm nút 'Gợi ý bắt chuyện' xem sao 🎲",
+  "Làm một ván cờ Caro 1-1 là cách phá tan sự ngại ngùng nhanh nhất 🎮",
+  "Tôn trọng nhau một chút là có ngay cuộc trò chuyện vui vẻ ✨",
+  "Bấm phím Esc để chuyển nhanh sang người khác nhé ⏭️",
+  "Lúc vắng người, bạn có thể tâm sự hoặc chơi cờ cùng Lumi 🤖"
 ];
 
 let ws = null;
@@ -462,6 +462,46 @@ function updateInterestsCounter() {
   if (!el.interestsContainer || !el.interestsCounter) return;
   const count = el.interestsContainer.querySelectorAll('input[type="checkbox"]:checked').length;
   el.interestsCounter.textContent = `Tối đa 5 (đã chọn: ${count}/5)`;
+  syncLiveFrequencyCard();
+}
+
+/** Đồng bộ Thẻ Vé Tần Số trực tiếp ở sảnh chờ (an toàn XSS với textContent) */
+function syncLiveFrequencyCard() {
+  const liveAvatar = $('#live-card-avatar');
+  const liveName = $('#live-card-name');
+  const liveMood = $('#live-card-mood');
+  const liveTags = $('#live-card-tags');
+
+  if (liveAvatar) {
+    liveAvatar.textContent = userAvatar || '🦊';
+  }
+  if (liveName && el.inputNickname) {
+    const typed = el.inputNickname.value.trim();
+    liveName.textContent = typed || 'Khách Tần Số Đêm';
+  }
+  if (liveMood && el.moodsContainer) {
+    const checkedMood = el.moodsContainer.querySelector('input[name="mood"]:checked');
+    const moodKey = checkedMood ? checkedMood.value : 'ngau_nhien';
+    liveMood.textContent = MOOD_NAMES[moodKey] || '☕ Tùy duyên';
+  }
+  if (liveTags && el.interestsContainer) {
+    const checkedBoxes = el.interestsContainer.querySelectorAll('input[type="checkbox"]:checked');
+    liveTags.textContent = '';
+    if (checkedBoxes.length === 0) {
+      const emptySpan = document.createElement('span');
+      emptySpan.className = 'live-pass-tag muted';
+      emptySpan.textContent = 'Chưa chọn chủ đề ưu tiên • Ghép mở tự nhiên';
+      liveTags.appendChild(emptySpan);
+    } else {
+      checkedBoxes.forEach((cb) => {
+        const labelSpan = cb.parentElement ? cb.parentElement.querySelector('span') : null;
+        const tag = document.createElement('span');
+        tag.className = 'live-pass-tag';
+        tag.textContent = labelSpan ? labelSpan.textContent : cb.value;
+        liveTags.appendChild(tag);
+      });
+    }
+  }
 }
 
 /** Định dạng thời gian */
@@ -749,14 +789,14 @@ function handleMatchFound(payload) {
     if (el.botBadge) el.botBadge.classList.remove('hidden');
     if (el.partnerMood) {
       if (el.partnerMoodText) {
-        el.partnerMoodText.textContent = payload.partnerMood || 'Lắng nghe & thấu hiểu';
+        el.partnerMoodText.textContent = payload.partnerMood || 'Lắng nghe & chia sẻ';
       }
       el.partnerMood.classList.remove('hidden');
     }
-    el.commonInterests.textContent = 'Trợ lý Đồng hành lắng nghe & giải trí 24/7';
+    el.commonInterests.textContent = 'Bạn ảo Lumi • Luôn ở đây khi bạn cần';
     if (el.btnSkip) {
       el.btnSkip.innerHTML = '<span class="action-icon">👥</span> Tìm người thật <kbd class="kbd-hint">Esc</kbd>';
-      el.btnSkip.title = 'Chuyển sang hàng đợi tìm bạn chat người thật (Phím tắt: Esc)';
+      el.btnSkip.title = 'Chuyển sang tìm bạn chat người thật (Phím tắt: Esc)';
     }
     if (el.btnReport) el.btnReport.classList.add('hidden');
   } else {
@@ -778,14 +818,14 @@ function handleMatchFound(payload) {
 
     // Hiển thị sở thích chung
     if (payload.commonInterests && payload.commonInterests.length > 0) {
-      el.commonInterests.textContent = `🎯 Chung sở thích: ${payload.commonInterests.join(', ')}`;
+      el.commonInterests.textContent = `🎯 Cùng thích: ${payload.commonInterests.join(', ')}`;
     } else {
-      el.commonInterests.textContent = '✨ Ghép ngẫu nhiên cùng tâm trạng';
+      el.commonInterests.textContent = '✨ Ghép ngẫu nhiên';
     }
 
     if (el.btnSkip) {
       el.btnSkip.innerHTML = '<span class="action-icon">⏭️</span> Bỏ qua <kbd class="kbd-hint">Esc</kbd>';
-      el.btnSkip.title = 'Bỏ qua và tìm người mới (Phím tắt: Esc)';
+      el.btnSkip.title = 'Đổi sang người khác (Phím tắt: Esc)';
     }
     if (el.btnReport) el.btnReport.classList.remove('hidden');
   }
@@ -802,9 +842,9 @@ function handleMatchFound(payload) {
 
   // Thêm thông báo hệ thống
   if (isCurrentPartnerBot) {
-    addSystemMessage('✨ Đã kết nối cùng Lumi! Bạn có thể thoải mái tâm sự hoặc bấm "🎮 Caro 1-1" để cùng chơi cờ giải trí nhé!');
+    addSystemMessage('✨ Bạn đang trò chuyện cùng Lumi. Cứ thoải mái tâm sự hoặc rủ Lumi chơi Caro nhé!');
   } else {
-    addSystemMessage(`🎉 Đã kết nối với ${payload.partnerNickname}! Hãy gửi lời chào mở đầu câu chuyện nào 👋`);
+    addSystemMessage(`🎉 Đã kết nối với ${payload.partnerNickname}! Chào nhau một câu nào 👋`);
   }
 
   // Chuyển sang màn hình chat
@@ -820,17 +860,17 @@ function showPartnerProfileModal() {
 
   if (isCurrentPartnerBot) {
     if (el.modalProfileAvatar) el.modalProfileAvatar.textContent = '🤖';
-    if (el.modalProfileName) el.modalProfileName.textContent = 'Lumi (AI Companion)';
-    if (el.modalProfileMoodPill) el.modalProfileMoodPill.textContent = '✨ Lắng nghe & thấu hiểu';
+    if (el.modalProfileName) el.modalProfileName.textContent = 'Lumi';
+    if (el.modalProfileMoodPill) el.modalProfileMoodPill.textContent = '✨ Luôn sẵn sàng lắng nghe';
     if (el.modalProfileDesc) {
-      el.modalProfileDesc.textContent = 'Lumi là người bạn đồng hành ảo thông minh được tích hợp sẵn, luôn túc trực 24/7 để lắng nghe mọi tâm tư, chia sẻ niềm vui nỗi buồn và cùng bạn chơi cờ Caro giải trí bất cứ lúc nào!';
+      el.modalProfileDesc.textContent = 'Lumi là người bạn ảo luôn ở đây để nghe bạn tâm sự mọi điều và cùng bạn làm vài ván cờ Caro giải trí bất cứ lúc nào!';
     }
     if (el.modalProfileInterests) {
       el.modalProfileInterests.innerHTML = `
-        <span class="profile-interest-tag">💬 Tâm sự ấm áp</span>
-        <span class="profile-interest-tag">🎮 Cao thủ cờ Caro</span>
-        <span class="profile-interest-tag">💡 Lời khuyên tích cực</span>
-        <span class="profile-interest-tag">🛡️ Không phán xét</span>
+        <span class="profile-interest-tag">💬 Tâm sự</span>
+        <span class="profile-interest-tag">🎮 Cờ Caro</span>
+        <span class="profile-interest-tag">💡 Chia sẻ</span>
+        <span class="profile-interest-tag">✨ Giữ bí mật</span>
       `;
     }
   } else {
@@ -839,7 +879,7 @@ function showPartnerProfileModal() {
     const moodLabel = MOOD_NAMES[currentPartner.mood] || currentPartner.mood || 'Tùy duyên';
     if (el.modalProfileMoodPill) el.modalProfileMoodPill.textContent = `Tâm trạng: ${moodLabel}`;
     if (el.modalProfileDesc) {
-      el.modalProfileDesc.textContent = `Người bạn ẩn danh này đang có trạng thái "${moodLabel}". Hãy tôn trọng và cùng nhau tạo nên một buổi trò chuyện thú vị nhé!`;
+      el.modalProfileDesc.textContent = `Bạn này đang có tâm trạng "${moodLabel}". Hãy chào nhau thật tự nhiên nhé!`;
     }
     if (el.modalProfileInterests) {
       if (currentPartner.interests && currentPartner.interests.length > 0) {
@@ -851,7 +891,7 @@ function showPartnerProfileModal() {
           el.modalProfileInterests.appendChild(interestTag);
         }
       } else {
-        el.modalProfileInterests.innerHTML = '<span class="profile-interest-tag">Tự do khám phá</span>';
+        el.modalProfileInterests.innerHTML = '<span class="profile-interest-tag">Nói chuyện tự do</span>';
       }
     }
   }
@@ -862,8 +902,8 @@ function showPartnerProfileModal() {
 
 /** Xử lý khi đối phương rời phòng */
 function handlePartnerLeft() {
-  addSystemMessage('Đối phương đã rời phòng chat.');
-  showToast('Đối phương đã rời phòng', 'info');
+  addSystemMessage('Bạn kia đã rời phòng chat.');
+  showToast('Người kia đã rời đi', 'info');
 
   if (el.icebreakerBanner) el.icebreakerBanner.classList.add('hidden');
   if (el.gamePanel) el.gamePanel.classList.add('hidden');
@@ -890,13 +930,13 @@ function handleIcebreaker(payload) {
   el.icebreakerCategory.textContent = payload.category || 'Chủ đề';
   el.icebreakerText.textContent = payload.question;
   el.icebreakerBanner.classList.remove('hidden');
-  addSystemMessage(`🎲 Gợi ý phá băng (${payload.category}): "${payload.question}"`);
+  addSystemMessage(`🎲 Gợi ý bắt chuyện: "${payload.question}"`);
 }
 
 /** Xử lý nhận lời mời chơi game */
 function handleGameInvite(payload) {
   if (!el.modalGameInvite) return;
-  el.gameInviterName.textContent = payload.from || 'Đối phương';
+  el.gameInviterName.textContent = payload.from || 'Bạn kia';
   el.modalGameInvite.classList.remove('hidden');
   playMatchSound();
 }
@@ -1006,24 +1046,24 @@ function handleGameState(payload) {
   // Cập nhật thông báo trạng thái
   if (game.status === 'playing') {
     if (game.turn === clientId) {
-      el.gameStatusText.textContent = `👉 Lượt của BẠN (${myGameSymbol})`;
+      el.gameStatusText.textContent = `👉 Đến lượt BẠN (${myGameSymbol})`;
       el.gameStatusText.style.color = 'var(--success)';
     } else {
       const partnerSymbol = myGameSymbol === 'X' ? 'O' : 'X';
-      el.gameStatusText.textContent = `⏳ Lượt đối phương (${partnerSymbol})`;
+      el.gameStatusText.textContent = `⏳ Đợi bạn kia đi (${partnerSymbol})`;
       el.gameStatusText.style.color = 'var(--text-muted)';
     }
     el.btnGameReplay.classList.add('hidden');
   } else if (game.status === 'ended') {
     if (game.winner === 'draw') {
-      el.gameStatusText.textContent = '🤝 Kết quả: Hòa cờ!';
+      el.gameStatusText.textContent = '🤝 Hòa cờ rồi!';
       el.gameStatusText.style.color = 'var(--warning)';
     } else if (game.winner === myGameSymbol) {
-      el.gameStatusText.textContent = `🎉 BẠN ĐÃ THẮNG! (${game.winner})`;
+      el.gameStatusText.textContent = `🎉 BẠN THẮNG RỒI! (${game.winner})`;
       el.gameStatusText.style.color = 'var(--success)';
       playMatchSound();
     } else {
-      el.gameStatusText.textContent = `😢 Bạn thua rồi! (${game.winner} thắng)`;
+      el.gameStatusText.textContent = `😢 Bạn thua ván này rồi! (${game.winner} thắng)`;
       el.gameStatusText.style.color = 'var(--danger)';
     }
     el.btnGameReplay.classList.remove('hidden');
@@ -1033,7 +1073,7 @@ function handleGameState(payload) {
 /** Xử lý khi bị KICK do vi phạm từ ngữ khiếm nhã */
 function handleKicked(payload) {
   if (el.kickedReason) {
-    el.kickedReason.textContent = payload.reason || 'Hệ thống phát hiện bạn sử dụng ngôn từ khiếm nhã, thô tục hoặc vi phạm tiêu chuẩn cộng đồng.';
+    el.kickedReason.textContent = payload.reason || 'Tin nhắn của bạn có từ ngữ không phù hợp nên đã bị ngắt kết nối.';
   }
   if (el.modalKicked) {
     el.modalKicked.classList.remove('hidden');
@@ -1338,7 +1378,18 @@ if (el.avatarSelector) {
 
     el.avatarSelector.querySelectorAll('.avatar-chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
+    syncLiveFrequencyCard();
     playTone(500, 'sine', 0.05, 0.08);
+  });
+}
+
+if (el.userAvatarPreview && el.avatarSelector) {
+  el.userAvatarPreview.addEventListener('click', () => {
+    const chips = Array.from(el.avatarSelector.querySelectorAll('.avatar-chip'));
+    if (chips.length === 0) return;
+    const currentIdx = chips.findIndex((c) => c.classList.contains('active'));
+    const nextChip = chips[(currentIdx + 1) % chips.length];
+    if (nextChip) nextChip.click();
   });
 }
 
@@ -1347,8 +1398,18 @@ if (el.btnRandomName) {
   el.btnRandomName.addEventListener('click', () => {
     const randomName = generateRandomNickname();
     el.inputNickname.value = randomName;
+    syncLiveFrequencyCard();
     el.inputNickname.focus();
     playTone(550, 'triangle', 0.08, 0.08);
+  });
+}
+
+el.inputNickname.addEventListener('input', syncLiveFrequencyCard);
+
+if (el.moodsContainer) {
+  el.moodsContainer.addEventListener('change', () => {
+    syncLiveFrequencyCard();
+    playTone(480, 'sine', 0.04, 0.06);
   });
 }
 
@@ -1578,6 +1639,10 @@ if (el.btnCloseIcebreaker) {
 }
 
 // ── Partner & Bot Profile Modal ────────────────────
+if (el.partnerAvatar) {
+  el.partnerAvatar.addEventListener('click', showPartnerProfileModal);
+}
+
 if (el.partnerMood) {
   el.partnerMood.addEventListener('click', showPartnerProfileModal);
 }

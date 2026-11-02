@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Biến môi trường / secrets (chỉ commit .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+
