@@ -1,0 +1,9 @@
+.git
+.idea
+**/node_modules
+.env
+.env.*
+!.env.docker.example
+tests
+docs
+*.log

@@ -1,0 +1,16 @@
+services:
+  chatmatch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${CHATMATCH_PORT:-3001}:3001"
+    environment:
+      PORT: "3001"
+      AZURE_STORAGE_ACCOUNT_NAME: "${AZURE_STORAGE_ACCOUNT_NAME:-}"
+      AZURE_STORAGE_CONTAINER_NAME: "${AZURE_STORAGE_CONTAINER_NAME:-chat-attachments}"
+      ATTACHMENT_TOKEN_SECRET: "${ATTACHMENT_TOKEN_SECRET:-}"
+      AZURE_CLIENT_ID: "${AZURE_CLIENT_ID:-}"
+      AZURE_TENANT_ID: "${AZURE_TENANT_ID:-}"
+      AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
