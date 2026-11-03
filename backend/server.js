@@ -849,6 +849,35 @@ const messageHandlers = {
     console.log(`[Server] Skip: ${client.nickname} (${clientId})`);
   },
 
+  // ── leave_room (rời phòng quay về trang chủ) ───────────
+  [CLIENT_TYPES.LEAVE_ROOM](clientId) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state !== 'CHATTING') return;
+
+    // Nếu đang ở phòng Bot Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      roomManager.removeClient(clientId);
+      client.state = 'CONNECTED';
+      console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) rời phòng Bot về trang chủ`);
+      return;
+    }
+
+    // Nếu đang ở phòng người thật
+    const result = roomManager.removeClient(clientId);
+    if (result && result.partnerId) {
+      notifyRoomLeft(clientId, result.partnerId, 'Đối phương đã rời khỏi phòng chat.');
+      const partner = clients.get(result.partnerId);
+      if (partner) {
+        partner.state = 'CONNECTED';
+      }
+    }
+
+    client.state = 'CONNECTED';
+    console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) đã về trang chủ`);
+  },
+
   // ── report ────────────────────────────────────────────
   [CLIENT_TYPES.REPORT](clientId, payload) {
     const client = clients.get(clientId);

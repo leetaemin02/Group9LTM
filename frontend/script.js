@@ -82,6 +82,7 @@ const el = {
   btnSkip: $('#btn-skip'),
   btnReport: $('#btn-report'),
   charCurrent: $('#char-current'),
+  btnLeaveRoom: $('#btn-leave-room'),
 
   // Partner Profile Modal (Lumi & Partner Info)
   modalPartnerInfo: $('#modal-partner-info'),
@@ -119,6 +120,9 @@ const el = {
   modalKicked: $('#modal-kicked'),
   kickedReason: $('#kicked-reason'),
   btnKickedOk: $('#btn-kicked-ok'),
+  modalLeaveConfirm: $('#modal-leave-confirm'),
+  btnCancelLeave: $('#btn-cancel-leave'),
+  btnConfirmLeave: $('#btn-confirm-leave'),
 
   // Report Modal
   modalReport: $('#modal-report'),
@@ -242,7 +246,7 @@ function playMatchSound() {
     playTone(523.25, 'triangle', 0.18, 0.12); // C5
     setTimeout(() => playTone(659.25, 'triangle', 0.22, 0.12), 100); // E5
     setTimeout(() => playTone(783.99, 'triangle', 0.35, 0.14), 200); // G5
-  } catch (e) {}
+  } catch (e) { }
 }
 
 /** Âm báo tin nhắn đến (Pop) */
@@ -251,7 +255,7 @@ function playMessageSound() {
   try {
     playTone(880, 'sine', 0.09, 0.1);
     setTimeout(() => playTone(1174.66, 'sine', 0.12, 0.08), 50);
-  } catch (e) {}
+  } catch (e) { }
 }
 
 /** Âm báo minigame click */
@@ -662,10 +666,8 @@ function handleMessage(raw) {
       break;
 
     case 'waiting':
-      // Không chuyển về màn hình waiting nếu đã vào màn hình chat
-      if (currentScreen !== 'chat') {
-        switchScreen('waiting');
-      }
+      // chuyển về màn hình waiting nếu đã vào màn hình chat
+      switchScreen('waiting');
       break;
 
     case 'solo_hint':
@@ -1512,7 +1514,7 @@ function sendMessage() {
 
   // Reset typing
   sendTypingState(false);
-  
+
   // Auto-resize
   el.inputMessage.style.height = 'auto';
   el.inputMessage.focus();
@@ -1583,8 +1585,55 @@ function sendTypingState(isTyping) {
 
 // ── Nút "Bỏ qua" (Skip) ───────────────────────────
 el.btnSkip.addEventListener('click', () => {
+  if (el.icebreakerBanner) el.icebreakerBanner.classList.add('hidden');
+  if (el.gamePanel) el.gamePanel.classList.add('hidden');
+  if (el.modalGameInvite) el.modalGameInvite.classList.add('hidden');
   send('skip');
 });
+
+// ── Nút "Rời phòng" quay về trang chủ (Dùng Modal xác nhận) ─────────────
+if (el.btnLeaveRoom) {
+  // Khi bấm nút Rời phòng -> Mở Modal
+  el.btnLeaveRoom.addEventListener('click', () => {
+    if (el.modalLeaveConfirm) el.modalLeaveConfirm.classList.remove('hidden');
+  });
+}
+
+// Bấm nút "Ở lại" -> Đóng Modal
+if (el.btnCancelLeave) {
+  el.btnCancelLeave.addEventListener('click', () => {
+    if (el.modalLeaveConfirm) el.modalLeaveConfirm.classList.add('hidden');
+  });
+}
+
+// Bấm click ra ngoài vùng nền mờ -> Cũng đóng Modal
+if (el.modalLeaveConfirm) {
+  const backdrop = el.modalLeaveConfirm.querySelector('.modal-backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', () => {
+      el.modalLeaveConfirm.classList.add('hidden');
+    });
+  }
+}
+
+// Bấm nút "Rời phòng" trên Modal -> Thực hiện thoát phòng
+if (el.btnConfirmLeave) {
+  el.btnConfirmLeave.addEventListener('click', () => {
+    if (el.modalLeaveConfirm) el.modalLeaveConfirm.classList.add('hidden');
+
+    // Gửi tín hiệu rời phòng lên server
+    send('leave_room');
+
+    // Dọn dẹp trạng thái chat phía giao diện
+    if (el.icebreakerBanner) el.icebreakerBanner.classList.add('hidden');
+    if (el.gamePanel) el.gamePanel.classList.add('hidden');
+    if (el.modalGameInvite) el.modalGameInvite.classList.add('hidden');
+
+    // Chuyển màn hình về trang chủ
+    switchScreen('login');
+    showToast('Đã rời phòng trò chuyện', 'info');
+  });
+}
 
 // ── Phím tắt Escape → Skip ─────────────────────────
 document.addEventListener('keydown', (e) => {
@@ -1600,6 +1649,18 @@ el.btnReport.addEventListener('click', () => {
   el.inputReportReason.value = '';
   el.inputReportReason.focus();
 });
+
+const logoBadge = document.querySelector('.logo-badge');
+if (logoBadge) {
+  logoBadge.style.cursor = 'pointer';
+  logoBadge.addEventListener('click', () => {
+    if (currentScreen === 'chat') {
+      el.btnLeaveRoom?.click();
+    } else if (currentScreen === 'waiting') {
+      el.btnCancel?.click();
+    }
+  });
+}
 
 el.btnReportCancel.addEventListener('click', () => {
   el.modalReport.classList.add('hidden');
