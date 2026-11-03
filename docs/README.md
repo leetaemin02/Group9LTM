@@ -34,3 +34,8 @@ Thư mục `docs/` chứa toàn bộ tài liệu kỹ thuật, kiến trúc, đ�
    - Cơ chế tự động dự phòng (Graceful In-Memory Fallback).
    - Hướng dẫn cài đặt và bảo mật Redis trên Linux VPS.
    - Hướng dẫn chạy PM2 Cluster Mode đa tiến trình.
+
+5. **[Chạy bằng Docker – nhiều instance + Redis (DOCKER.md)](DOCKER.md)**
+   - Dựng cụm 1 Redis + 2 server Node.js + Nginx load balancer bằng `docker compose up --build`.
+   - Cách kiểm chứng tin nhắn đi qua Redis Pub/Sub giữa 2 instance.
+   - Giới hạn khi demo (trạng thái Caro/rate limit nằm trong RAM từng instance) và xử lý sự cố.
