@@ -136,7 +136,7 @@ Gửi xuống client sau 10 giây chờ nếu hàng đợi chưa có bạn chat 
 - **Client payload:** `ticket` từ `attachment_upload`. Server xác minh tệp tồn tại trong Blob Storage và phiên vẫn ở cùng phòng trước khi phát.
 - **Server behavior:** Sau khi xác minh blob tồn tại, server chờ Azure Defender for Storage trả kết quả quét. Chỉ tag `Malware Scanning scan result = No threats found` mới được chia sẻ; `Malicious`, `Error`, `Not scanned`, thiếu kết quả quá thời hạn chờ hoặc lỗi tra cứu đều không phát attachment.
 - **Server events:** Khi file sạch, `attachment` được gửi tới người nhận và `attachment_sent` tới người gửi; payload gồm `attachment` (`url`, `fileName`, `contentType`, `category`, `size`, `expiresAt`) và `timestamp`. Trường hợp không có kết quả sạch, người gửi nhận `error` với mã `ATTACHMENT_REJECTED` hoặc `ATTACHMENT_FAILED`.
-- URL do server ký chỉ có quyền đọc, HTTPS, hết hạn sau 24 giờ. Container phải private; blob được xóa theo Azure lifecycle policy (đề xuất sau 7 ngày).
+- URL do server ký chỉ có quyền đọc, HTTPS, hết hạn sau 24 giờ. Container phải private; policy lifecycle mẫu xóa blob trong prefix `<container>/chat/` sau ngưỡng 1 ngày. Azure xử lý bất đồng bộ nên link có thể hết hạn trước khi blob bị xóa; policy không bảo đảm xóa chính xác sau 24 giờ.
 
 ### 2.5. `typing` – Chỉ báo đối phương đang nhập
 - **Payload:**

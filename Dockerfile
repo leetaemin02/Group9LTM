@@ -2,7 +2,10 @@
 # ChatMatch – Nhóm 9: Image cho WebSocket server
 # Build context là thư mục gốc vì server.js phục vụ ../frontend
 # ─────────────────────────────────────────────────────────────
-FROM node:22-alpine
+FROM node:22-bookworm-slim
+
+ENV NODE_ENV=production
+ENV PORT=3001
 
 WORKDIR /app/backend
 
@@ -17,11 +20,9 @@ COPY frontend/ /app/frontend/
 # Không chạy bằng root
 USER node
 
-ENV PORT=3001
 EXPOSE 3001
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3001)+'/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 CMD ["node", "server.js"]
-

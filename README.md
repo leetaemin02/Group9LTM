@@ -74,7 +74,7 @@ ChatMatch/
 - Vì backend đang phục vụ frontend, chỉ cần chạy **một server**. Truy cập địa chỉ HTTP của server sẽ mở giao diện; trình duyệt tự kết nối WebSocket tới cùng địa chỉ.
 
 ### Yêu cầu
-- [Node.js](https://nodejs.org/) >= 18.x
+- [Node.js](https://nodejs.org/) >= 22.x
 
 ### Bước 1: Cài đặt dependencies
 ```bash
@@ -95,6 +95,20 @@ $env:PORT=3002; npm start
 ```
 
 Nếu đã đổi cổng sang 3002, mở `http://localhost:3002` trong trình duyệt.
+
+### Chạy bằng Docker
+
+Repository có thể chạy bằng Docker Compose mà không cần cài Node.js trực tiếp trên máy:
+
+```powershell
+docker compose up --build
+```
+
+Sau khi server khởi động, mở `http://localhost:3001`. Giữ terminal đang chạy; nhấn `Ctrl+C` để dừng. Lần sau có thể chạy `docker compose up` để khởi động lại.
+
+Container mặc định chạy ChatMatch không bật upload Azure. Muốn dùng Azure Blob Storage, sao chép `.env.docker.example` thành `.env` ở thư mục gốc repository rồi điền cấu hình Storage và thông tin xác thực Azure phù hợp. `az login` trên Windows không tự đăng nhập bên trong container. Không commit file `.env` hoặc chia sẻ `AZURE_CLIENT_SECRET`/`ATTACHMENT_TOKEN_SECRET`.
+
+Docker Desktop chỉ chạy container trên máy hiện tại, chưa đưa website lên Internet. Muốn public, cần triển khai image lên VPS/server và cấu hình mạng, tên miền, HTTPS riêng.
 
 ### Bật kiểm tra danh tiếng liên kết (tùy chọn)
 
@@ -119,7 +133,7 @@ Tính năng đính kèm dùng Azure Blob Storage; nếu chưa cấu hình tài k
 - Ảnh: JPG/JPEG, PNG, GIF, WebP; tài liệu: PDF, DOCX, XLSX, PPTX, TXT, CSV — tối đa 10 MB mỗi tệp.
 - Video: MP4 hoặc WebM — tối đa 50 MB.
 - Tệp khác (bao gồm chương trình/script và SVG) bị từ chối. Server kiểm tra phần mở rộng, dung lượng và chữ ký định dạng cơ bản, sau đó chờ Azure Defender for Storage quét malware; chỉ kết quả `No threats found` mới được chia sẻ.
-- Người nhận tải trực tiếp từ Blob qua URL HTTPS có quyền chỉ đọc, hết hạn sau 24 giờ. Hãy cấu hình Azure Storage lifecycle để xóa blob trong prefix `chat/` sau khoảng 7 ngày; lifecycle chạy bất đồng bộ nên thời điểm xóa thực tế có thể trễ. Nếu bỏ qua bước này, tệp vẫn chiếm dung lượng sau khi link hết hạn.
+- Người nhận tải trực tiếp từ Blob qua URL HTTPS có quyền chỉ đọc, hết hạn sau 24 giờ. Policy Azure lifecycle mẫu đặt ngưỡng xóa blob trong prefix `chat/` sau 1 ngày (24 giờ). Đây không phải cam kết xóa đúng hoặc tối đa trong 24 giờ: policy xử lý bất đồng bộ, lần chạy đầu sau khi tạo/sửa có thể bắt đầu trễ tới 24 giờ, và blob có thể còn tồn tại lâu hơn. Hạn link tải không tự xóa blob.
 - Kết quả `Malicious`, `Error`, `Not scanned`, thiếu kết quả hoặc vượt thời gian chờ đều bị từ chối (fail-closed). Azure Defender có thể quét chậm; app chờ tối đa 3 phút mặc định. Bật Defender for Storage **On-upload malware scanning**, giữ bật blob index tags và đặt giới hạn chi phí quét hàng tháng.
 
 Thiết lập:
@@ -128,7 +142,7 @@ Thiết lập:
 3. Bật system-assigned Managed Identity cho ứng dụng chạy ở Azure. Cấp `Storage Blob Data Contributor` ở phạm vi container và `Storage Blob Delegator` ở phạm vi Storage Account. Khi phát triển local, dùng identity của `az login` và cấp hai role tương tự cho user đó.
 4. Đặt `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_STORAGE_CONTAINER_NAME` trong environment. Nếu dùng endpoint tùy chỉnh, đặt thêm `AZURE_STORAGE_BLOB_ENDPOINT`; mặc định SDK dùng `https://<account>.blob.core.windows.net`.
 5. Sinh `ATTACHMENT_TOKEN_SECRET` bằng lệnh bên dưới rồi đưa vào secret store của môi trường deploy. Dùng cùng giá trị trên mọi instance; không commit `.env` hay in secret ra log.
-6. Tạo file `lifecycle-policy.json` từ ví dụ dưới đây và áp dụng policy bằng Azure CLI. Prefix phải có dạng `<container>/chat/`.
+6. Áp dụng [policy lifecycle mẫu](./docs/azure-blob-lifecycle-policy.json) bằng Azure CLI hoặc Azure Portal. Prefix phải có dạng `<container>/chat/`; nếu đổi tên container, sửa prefix tương ứng. Policy đặt ngưỡng tuổi blob 1 ngày, không bảo đảm blob bị xóa chính xác hoặc tối đa sau 24 giờ.
 7. Đặt `MAX_CONCURRENT_ATTACHMENT_UPLOADS` theo giới hạn bộ nhớ/băng thông của mỗi instance (mặc định 4); `ATTACHMENT_SCAN_TIMEOUT_MS` mặc định 180000 ms. Khi đạt giới hạn upload, server trả HTTP 503 để client thử lại sau.
 
 PowerShell: đăng nhập local, tạo container private và sinh secret trong phiên terminal hiện tại:
@@ -155,36 +169,17 @@ az role assignment create --assignee-object-id $principalId --assignee-principal
 
 Với local developer, lấy Object ID bằng `$principalId = az ad signed-in-user show --query id --output tsv` và đổi `ServicePrincipal` thành `User`. Cần quyền quản trị phù hợp để tạo role assignment; sau khi gán role, có thể cần chờ vài phút để RBAC có hiệu lực. Container có thể tạo từ Portal nếu lệnh CLI chưa được cấp quyền data-plane.
 
-Ví dụ rule lifecycle JSON (tên container/prefix phải khớp cấu hình thực tế):
-```json
-{
-  "rules": [{
-    "enabled": true,
-    "name": "delete-chat-attachments-after-seven-days",
-    "type": "Lifecycle",
-    "definition": {
-      "filters": {
-        "blobTypes": ["blockBlob"],
-        "prefixMatch": ["chat-attachments/chat/"]
-      },
-      "actions": {
-        "baseBlob": {
-          "delete": { "daysAfterModificationGreaterThan": 7 }
-        }
-      }
-    }
-  }]
-}
-```
-Lưu JSON trên thành `lifecycle-policy.json`, sau đó chạy lệnh Azure CLI (cần quyền quản lý Storage Account):
+Policy JSON mẫu dùng container `chat-attachments`. Azure có thể mất tới 24 giờ để bắt đầu lượt chạy đầu tiên sau khi tạo/sửa policy; các lượt xử lý tiếp theo cũng bất đồng bộ. Nếu tài khoản đã có lifecycle policy khác, hãy gộp rule này vào policy hiện tại thay vì ghi đè các rule đang dùng. Lệnh cần quyền quản lý Storage Account:
 ```powershell
-az storage account management-policy create --resource-group $resourceGroup --account-name $storageAccount --policy '@lifecycle-policy.json'
+az storage account management-policy create --resource-group $resourceGroup --account-name $storageAccount --policy '@docs/azure-blob-lifecycle-policy.json'
 az storage account management-policy show --resource-group $resourceGroup --account-name $storageAccount
 ```
 
+Có thể xem và xóa thủ công tệp trong Azure Portal: **Storage accounts → tài khoản storage → Data storage → Containers → `chat-attachments` → `chat/`** (Storage browser/Container). Container phải private; không bật anonymous access. Lifecycle policy nằm ở **Data management → Lifecycle management** trong Storage Account. Rule áp dụng cho blob có đường dẫn `chat/`; chỉ backend gửi file lên, Azure Blob Storage là nơi lưu file, không phải filesystem của VPS hay Git repository. Nếu bật soft delete, blob đã xóa vẫn có thể khôi phục trong thời gian lưu soft-delete; nếu bật versioning, cần policy riêng để xóa các phiên bản cũ.
+
 Trong Azure App Service/Container Apps, bật Managed Identity, đặt các biến môi trường trên dưới dạng app settings/secret, rồi khởi động lại ứng dụng. Trên mọi replica phải dùng cùng account, container và `ATTACHMENT_TOKEN_SECRET`; mỗi identity phải có role phù hợp.
 
-Ứng dụng dùng `DefaultAzureCredential`: Managed Identity trên Azure và thông tin xác thực developer đã đăng nhập khi chạy local; không lưu Storage Account Key trong mã nguồn. Upload đi qua backend để kiểm tra kích thước/chữ ký, vì vậy backend cần đủ băng thông cho tệp (đến 50 MB). Mỗi process mặc định xử lý tối đa 4 upload đồng thời. Blob index tags là kết quả scan do Defender ghi nhưng không chống sửa đổi; container phải private, không cấp credentials cho browser và chỉ backend được phép tạo SAS sau khi kiểm tra kết quả. Kết quả “No threats found” không bảo đảm tệp vô hại tuyệt đối. Tin nhắn không được lưu lịch sử sau phòng chat; blob được dọn theo lifecycle policy, nhưng Azure chạy policy bất đồng bộ nên không bảo đảm xóa chính xác vào ngày thứ 7.
+Ứng dụng dùng `DefaultAzureCredential`: Managed Identity trên Azure và thông tin xác thực developer đã đăng nhập khi chạy local; không lưu Storage Account Key trong mã nguồn. Upload đi qua backend để kiểm tra kích thước/chữ ký, vì vậy backend cần đủ băng thông cho tệp (đến 50 MB). Mỗi process mặc định xử lý tối đa 4 upload đồng thời. Blob index tags là kết quả scan do Defender ghi nhưng không chống sửa đổi; container phải private, không cấp credentials cho browser và chỉ backend được phép tạo SAS sau khi kiểm tra kết quả. Kết quả “No threats found” không bảo đảm tệp vô hại tuyệt đối. Tin nhắn không được lưu lịch sử sau phòng chat; blob được dọn theo lifecycle policy, nhưng ngưỡng 24 giờ không phải cam kết xóa chính xác/tối đa trong 24 giờ. Khi bổ sung tính năng nối lại, cần lưu metadata/định danh cuộc trò chuyện riêng và chấp nhận tệp hết hạn nếu thời gian nối lại vượt quá thời hạn lưu.
 
 Tham khảo hướng dẫn chính thức về [Defender for Storage on-upload malware scanning](https://learn.microsoft.com/azure/defender-for-cloud/on-upload-malware-scanning), [kết quả quét malware](https://learn.microsoft.com/azure/defender-for-cloud/introduction-malware-scanning), [Azure Blob lifecycle policy](https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-policy-structure), [ủy quyền Azure CLI bằng Microsoft Entra](https://learn.microsoft.com/azure/storage/blobs/authorize-data-operations-cli) và [Azure CLI quản lý lifecycle policy](https://learn.microsoft.com/cli/azure/storage/account/management-policy?view=azure-cli-latest).
 
@@ -270,7 +265,7 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
   - Báo cáo sẽ ngắt phòng chat và chặn hai phiên trình duyệt vừa ghép không gặp lại nhau trong 5 phút, kể cả khi tải lại cùng tab nếu `sessionStorage` còn giữ `deviceId`.
   - Tin nhắn bị bộ lọc nội dung từ chối sẽ ngắt phòng, ban người gửi 10 phút và chặn cặp thiết bị/IP trong bộ nhớ tiến trình.
 - ✅ **Cảnh báo và kiểm tra liên kết** – Heuristic cục bộ luôn nhận diện dấu hiệu đáng ngờ; có thể bật Google Web Risk để tra cứu phishing/malware. URL được xác nhận nguy hiểm bị chặn trước khi chuyển tiếp; API lỗi sẽ hiển thị rõ trạng thái chưa xác minh. Web Risk tùy chọn, tắt mặc định; việc tra cứu chia sẻ URL với Google.
-- ✅ **Gửi tệp trong chat** – Chia sẻ ảnh/video và tài liệu phổ biến qua Azure Blob Storage riêng tư; kiểm tra loại/dung lượng, URL tải chỉ đọc hết hạn 24 giờ, hỗ trợ lifecycle xóa file sau 7 ngày.
+- ✅ **Gửi tệp trong chat** – Chia sẻ ảnh/video và tài liệu phổ biến qua Azure Blob Storage riêng tư; kiểm tra loại/dung lượng, URL tải chỉ đọc hết hạn sau 24 giờ, có policy mẫu để Azure bắt đầu xóa blob sau 1 ngày (thời điểm xóa thực tế có thể trễ).
 - ✅ **Tuân thủ tiêu chuẩn an toàn bảo mật (CVE, OWASP, NIST, RFC)**:
   - **OWASP ASVS v4.0 / CWE-1385:** Chống tấn công Cross-Site WebSocket Hijacking (CSWSH) qua xác thực `Origin` trong `verifyClient`.
   - **OWASP Top 10 A03:2021 / CWE-79:** Chống XSS qua cơ chế DOM `textContent` và schema validation.
