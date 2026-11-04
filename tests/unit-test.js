@@ -57,6 +57,33 @@ assert.strictEqual(validatePayload(CLIENT_TYPES.ATTACHMENT_REQUEST, { fileName: 
 assert.strictEqual(validatePayload(CLIENT_TYPES.ATTACHMENT_REQUEST, { fileName: 'movie.mp4', size: 51 * 1024 * 1024 }).ok, false);
 assert.strictEqual(validatePayload(CLIENT_TYPES.ATTACHMENT_SEND, { ticket: 'ticket' }).ok, true);
 
+// Test validatePayload - VOICE
+assert.strictEqual(validatePayload(CLIENT_TYPES.VOICE, {
+  voiceId: 'a1b2c3d4-e5f6-4a1b-8c2d-123456789abc',
+  url: '/api/voice/a1b2c3d4-e5f6-4a1b-8c2d-123456789abc',
+  duration: 5.4,
+}).ok, true);
+assert.strictEqual(validatePayload(CLIENT_TYPES.VOICE, {
+  voiceId: 'invalid-uuid',
+  url: '/api/voice/invalid-uuid',
+  duration: 5,
+}).ok, false);
+assert.strictEqual(validatePayload(CLIENT_TYPES.VOICE, {
+  voiceId: 'a1b2c3d4-e5f6-4a1b-8c2d-123456789abc',
+  url: 'https://evil.com',
+  duration: 5,
+}).ok, false);
+
+// Test validatePayload - MEME
+assert.strictEqual(validatePayload(CLIENT_TYPES.MEME, {
+  url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif',
+  title: 'Mèo like <script>',
+  memeId: 'cat_ok',
+}).ok, true);
+assert.strictEqual(validatePayload(CLIENT_TYPES.MEME, {
+  url: '',
+}).ok, false);
+
 console.log('✅ protocol.js passed');
 
 console.log('--- Testing linkSafety.js ---');

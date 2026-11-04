@@ -92,6 +92,20 @@ Yêu cầu server gửi câu hỏi mở đầu ngẫu nhiên để xóa tan khô
 ### 1.14. `game_quit` – Đóng bàn cờ / Thoát trò chơi
 - **Payload:** `{}` (rỗng)
 
+### 1.15. `voice` – Gửi tin nhắn thoại (Voice Message)
+Gửi sau khi ghi âm và tải tệp âm thanh lên `/api/voice/upload`.
+- **Payload:**
+  - `voiceId` *(string, UUID)*: Mã định danh đoạn ghi âm.
+  - `url` *(string)*: Đường dẫn phát trực tiếp âm thanh (`/api/voice/{voiceId}`).
+  - `duration` *(number)*: Thời lượng ghi âm tính theo giây (0.1 - 120 giây).
+
+### 1.16. `meme` – Gửi meme / sticker GIF
+Gửi hình ảnh GIF động hoặc meme thịnh hành được chọn từ thanh gợi ý TikTok hoặc khay meme.
+- **Payload:**
+  - `url` *(string, URL)*: Đường dẫn ảnh meme / GIF.
+  - `title` *(string, tùy chọn)*: Tiêu đề hoặc mô tả cảm xúc của meme.
+  - `memeId` *(string, tùy chọn)*: Mã nhận diện meme.
+
 ---
 
 ## 2. Các thông điệp từ Server gửi xuống Client (Server → Client)
@@ -142,7 +156,21 @@ Gửi xuống client sau 10 giây chờ nếu hàng đợi chưa có bạn chat 
 - **Payload:**
   - `isTyping` *(boolean)*
 
-### 2.6. `partner_left` – Đối phương đã rời khỏi phòng chat
+### 2.6. `voice` – Nhận tin nhắn thoại từ đối tác
+- **Payload:**
+  - `voiceId` *(string)*: Mã tin nhắn thoại.
+  - `url` *(string)*: Đường dẫn phát tệp âm thanh.
+  - `duration` *(number)*: Thời lượng giây.
+  - `timestamp` *(string, ISO 8601)*: Thời gian gửi.
+
+### 2.7. `meme` – Nhận meme / GIF từ đối tác
+- **Payload:**
+  - `url` *(string)*: Đường dẫn hình ảnh GIF / Meme.
+  - `title` *(string)*: Tiêu đề hoặc nhãn cảm xúc.
+  - `memeId` *(string, tùy chọn)*: Mã nhận diện meme.
+  - `timestamp` *(string, ISO 8601)*: Thời gian gửi.
+
+### 2.8. `partner_left` – Đối phương đã rời khỏi phòng chat
 - **Payload:**
   - `reason` *(string, tùy chọn)*: Lý do đối phương rời đi (tự thoát hoặc bị hệ thống trục xuất).
 

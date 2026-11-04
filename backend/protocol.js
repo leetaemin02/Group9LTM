@@ -43,58 +43,63 @@ const VALID_MOODS = Object.freeze([
 
 /** Message type Client → Server */
 const CLIENT_TYPES = Object.freeze({
-  JOIN:        'join',        // Đăng ký biệt danh + sở thích + tâm trạng
-  FIND_MATCH:  'find_match',  // Vào hàng đợi ghép cặp
-  START_SOLO:  'start_solo',  // Bắt đầu trò chuyện/chơi game cùng Bạn Đồng Hành Lumi (Solo)
-  CANCEL:      'cancel',      // Rời hàng đợi
-  MESSAGE:     'message',     // Gửi tin nhắn
+  JOIN: 'join',        // Đăng ký biệt danh + sở thích + tâm trạng
+  FIND_MATCH: 'find_match',  // Vào hàng đợi ghép cặp
+  START_SOLO: 'start_solo',  // Bắt đầu trò chuyện/chơi game cùng Bạn Đồng Hành Lumi (Solo)
+  CANCEL: 'cancel',      // Rời hàng đợi
+  MESSAGE: 'message',     // Gửi tin nhắn
   ATTACHMENT_REQUEST: 'attachment_request', // Yêu cầu cấp phép tải tệp lên
   ATTACHMENT_SEND: 'attachment_send', // Chia sẻ tệp đã tải lên với đối phương
-  TYPING:      'typing',      // Báo đang nhập / ngừng nhập
-  SKIP:        'skip',        // Bỏ qua người hiện tại
-  REPORT:      'report',      // Báo cáo đối phương
-  ICEBREAKER:  'icebreaker',  // Yêu cầu câu hỏi phá băng mở đầu
+  TYPING: 'typing',      // Báo đang nhập / ngừng nhập
+  SKIP: 'skip',        // Bỏ qua người hiện tại
+  REPORT: 'report',      // Báo cáo đối phương
+  ICEBREAKER: 'icebreaker',  // Yêu cầu câu hỏi phá băng mở đầu
   GAME_INVITE: 'game_invite', // Mời chơi minigame 1-1
   GAME_ACCEPT: 'game_accept', // Chấp nhận lời mời chơi game
-  GAME_MOVE:   'game_move',   // Đánh nước cờ { index: 0..399 }
-  GAME_RESET:  'game_reset',  // Chơi lại ván mới
-  GAME_QUIT:   'game_quit',   // Đóng bàn cờ
+  GAME_MOVE: 'game_move',   // Đánh nước cờ { index: 0..399 }
+  GAME_RESET: 'game_reset',  // Chơi lại ván mới
+  GAME_QUIT: 'game_quit',   // Đóng bàn cờ
+  LEAVE_ROOM: 'leave_room', // rời phòng
+  VOICE: 'voice',           // Gửi tin nhắn thoại { voiceId, duration, url }
+  MEME: 'meme',             // Gửi meme sticker { memeId, url, title }
 });
 
 /** Message type Server → Client */
 const SERVER_TYPES = Object.freeze({
-  CONNECTED:    'connected',     // Xác nhận kết nối
-  WAITING:      'waiting',       // Đang trong hàng đợi
-  SOLO_HINT:    'solo_hint',     // Gợi ý tâm sự/chơi game cùng Lumi khi chờ lâu
-  MATCH_FOUND:  'match_found',   // Ghép cặp thành công
-  MESSAGE:      'message',       // Tin nhắn từ đối phương
+  CONNECTED: 'connected',     // Xác nhận kết nối
+  WAITING: 'waiting',       // Đang trong hàng đợi
+  SOLO_HINT: 'solo_hint',     // Gợi ý tâm sự/chơi game cùng Lumi khi chờ lâu
+  MATCH_FOUND: 'match_found',   // Ghép cặp thành công
+  MESSAGE: 'message',       // Tin nhắn từ đối phương
+  VOICE: 'voice',           // Tin nhắn thoại từ đối phương
+  MEME: 'meme',             // Tin nhắn meme từ đối phương
   ATTACHMENT_UPLOAD: 'attachment_upload', // Ticket tạm thời để tải tệp lên
-  ATTACHMENT:   'attachment',    // Tệp được chia sẻ trong phòng chat
+  ATTACHMENT: 'attachment',    // Tệp được chia sẻ trong phòng chat
   ATTACHMENT_SENT: 'attachment_sent', // Xác nhận đã chia sẻ tệp
   LINK_WARNING: 'link_warning',  // Cảnh báo an toàn liên kết gửi cho người gửi
-  TYPING:       'typing',        // Đối phương đang nhập
+  TYPING: 'typing',        // Đối phương đang nhập
   PARTNER_LEFT: 'partner_left',  // Đối phương rời phòng
   ONLINE_COUNT: 'online_count',  // Số người online
-  ERROR:        'error',         // Lỗi
-  REPORTED:     'reported',      // Xác nhận đã report
-  ICEBREAKER:   'icebreaker',    // Câu hỏi phá băng được kích hoạt
-  GAME_STATE:   'game_state',    // Đồng bộ trạng thái minigame
-  KICKED:       'kicked',        // Bị buộc rời phòng & khóa tạm do vi phạm
+  ERROR: 'error',         // Lỗi
+  REPORTED: 'reported',      // Xác nhận đã report
+  ICEBREAKER: 'icebreaker',    // Câu hỏi phá băng được kích hoạt
+  GAME_STATE: 'game_state',    // Đồng bộ trạng thái minigame
+  KICKED: 'kicked',        // Bị buộc rời phòng & khóa tạm do vi phạm
 });
 
 /** Mã lỗi */
 const ERROR_CODES = Object.freeze({
-  INVALID_FORMAT:   'INVALID_FORMAT',    // JSON sai định dạng
-  INVALID_TYPE:     'INVALID_TYPE',      // type không hợp lệ
-  INVALID_PAYLOAD:  'INVALID_PAYLOAD',   // payload không hợp lệ
-  RATE_LIMITED:     'RATE_LIMITED',       // Gửi quá nhanh
-  NOT_IN_ROOM:      'NOT_IN_ROOM',       // Chưa ở trong phòng chat
-  NOT_JOINED:       'NOT_JOINED',        // Chưa đăng ký biệt danh
-  ALREADY_WAITING:  'ALREADY_WAITING',   // Đã trong hàng đợi
+  INVALID_FORMAT: 'INVALID_FORMAT',    // JSON sai định dạng
+  INVALID_TYPE: 'INVALID_TYPE',      // type không hợp lệ
+  INVALID_PAYLOAD: 'INVALID_PAYLOAD',   // payload không hợp lệ
+  RATE_LIMITED: 'RATE_LIMITED',       // Gửi quá nhanh
+  NOT_IN_ROOM: 'NOT_IN_ROOM',       // Chưa ở trong phòng chat
+  NOT_JOINED: 'NOT_JOINED',        // Chưa đăng ký biệt danh
+  ALREADY_WAITING: 'ALREADY_WAITING',   // Đã trong hàng đợi
   ALREADY_CHATTING: 'ALREADY_CHATTING',  // Đang chat rồi
   KICKED_PROFANITY: 'KICKED_PROFANITY',  // Bị kick do nói tục/khiếm nhã
-  SKIP_COOLDOWN:    'SKIP_COOLDOWN',     // Spam skip quá nhanh
-  BANNED:           'BANNED',            // Đang trong thời gian phạt cấm chat
+  SKIP_COOLDOWN: 'SKIP_COOLDOWN',     // Spam skip quá nhanh
+  BANNED: 'BANNED',            // Đang trong thời gian phạt cấm chat
 });
 
 // ─── Hàm escape HTML (chống XSS) ──────────────────────────────────────────
@@ -227,6 +232,10 @@ function validatePayload(type, payload) {
       };
     }
 
+    //rời phòng
+    case CLIENT_TYPES.LEAVE_ROOM:
+      return { ok: true, sanitized: {} };
+
     // ── message ──────────────────────────────────────────
     case CLIENT_TYPES.MESSAGE: {
       if (typeof payload.text !== 'string' || payload.text.trim().length === 0) {
@@ -265,6 +274,46 @@ function validatePayload(type, payload) {
         return { ok: false, error: 'isTyping phải là boolean' };
       }
       return { ok: true, sanitized: { isTyping: payload.isTyping } };
+    }
+
+    // ── voice ─────────────────────────────────────────────
+    case CLIENT_TYPES.VOICE: {
+      if (typeof payload.voiceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.voiceId)) {
+        return { ok: false, error: 'voiceId không hợp lệ' };
+      }
+      if (typeof payload.url !== 'string' || !payload.url.startsWith('/api/voice/')) {
+        return { ok: false, error: 'url voice không hợp lệ' };
+      }
+      if (typeof payload.duration !== 'number' || payload.duration <= 0 || payload.duration > 120) {
+        return { ok: false, error: 'duration không hợp lệ (tối đa 120 giây)' };
+      }
+      return {
+        ok: true,
+        sanitized: {
+          voiceId: payload.voiceId,
+          url: payload.url,
+          duration: Math.round(payload.duration * 10) / 10,
+        },
+      };
+    }
+
+    // ── meme & sticker ────────────────────────────────────
+    case CLIENT_TYPES.MEME: {
+      if (typeof payload.url !== 'string' || payload.url.length === 0 || payload.url.length > 500) {
+        return { ok: false, error: 'url meme không hợp lệ' };
+      }
+      const title = typeof payload.title === 'string' ? payload.title.slice(0, 100) : 'Meme';
+      const memeId = typeof payload.memeId === 'string' ? payload.memeId.slice(0, 50) : '';
+      const isSticker = Boolean(payload.isSticker);
+      return {
+        ok: true,
+        sanitized: {
+          url: payload.url,
+          title: escapeHtml(title),
+          memeId: escapeHtml(memeId),
+          isSticker,
+        },
+      };
     }
 
     // ── report ───────────────────────────────────────────
@@ -347,6 +396,14 @@ const serverMsg = {
 
   message(text, timestamp, linkSafety = null) {
     return createMessage(SERVER_TYPES.MESSAGE, { text, timestamp, linkSafety });
+  },
+
+  voice(voiceData, timestamp = new Date().toISOString()) {
+    return createMessage(SERVER_TYPES.VOICE, { ...voiceData, timestamp });
+  },
+
+  meme(memeData, timestamp = new Date().toISOString()) {
+    return createMessage(SERVER_TYPES.MEME, { ...memeData, timestamp });
   },
 
   attachmentUpload(uploadTicket) {

@@ -28,7 +28,7 @@ const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
 const Moderation = require('./moderation');
 const RedisManager = require('./redisManager');
-const { checkContent } = require('./contentFilter');
+const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
 const { analyzeLinkSafety } = require('./linkSafety');
 const { checkMessageLinks } = require('./webRisk');
 const {
@@ -69,14 +69,16 @@ const ipConnections = new Map(); // ip -> count
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.js':   'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.svg':  'image/svg+xml',
-  '.ico':  'image/x-icon',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
   '.avif': 'image/avif',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
 };
 
 // ─── HTTP Server (phục vụ file tĩnh) ──────────────────────────────────────
@@ -136,11 +138,102 @@ function handleAttachmentUploadRequest(req, res, uploadId) {
     });
 }
 
+// ─── Voice Recording Storage (In-Memory với TTL & Dung lượng tối đa) ──────────
+const voiceStorage = new Map();
+const MAX_VOICE_STORAGE_ITEMS = 500;
+const VOICE_TTL_MS = 60 * 60 * 1000; // 1 giờ
+const MAX_VOICE_BYTES = 3 * 1024 * 1024; // 3MB tối đa cho 1 đoạn ghi âm
+
+function pruneVoiceStorage() {
+  const now = Date.now();
+  for (const [id, item] of voiceStorage.entries()) {
+    if (now - item.createdAt > VOICE_TTL_MS) {
+      voiceStorage.delete(id);
+    }
+  }
+  while (voiceStorage.size > MAX_VOICE_STORAGE_ITEMS) {
+    const oldestKey = voiceStorage.keys().next().value;
+    voiceStorage.delete(oldestKey);
+  }
+}
+
+function handleVoiceUploadRequest(req, res) {
+  let bodyLength = 0;
+  const chunks = [];
+  const contentType = req.headers['content-type'] || 'audio/webm';
+
+  req.on('data', (chunk) => {
+    bodyLength += chunk.length;
+    if (bodyLength > MAX_VOICE_BYTES) {
+      req.destroy();
+      writeJsonResponse(res, 413, { error: 'Tệp ghi âm vượt quá giới hạn 3MB.' });
+    } else {
+      chunks.push(chunk);
+    }
+  });
+
+  req.on('end', () => {
+    if (res.writableEnded) return;
+    if (bodyLength === 0) {
+      writeJsonResponse(res, 400, { error: 'Dữ liệu âm thanh trống.' });
+      return;
+    }
+    pruneVoiceStorage();
+    const voiceId = crypto.randomUUID();
+    const buffer = Buffer.concat(chunks);
+    voiceStorage.set(voiceId, {
+      buffer,
+      mimeType: contentType.split(';')[0].trim() || 'audio/webm',
+      createdAt: Date.now(),
+      size: buffer.length,
+    });
+    writeJsonResponse(res, 201, {
+      ok: true,
+      voiceId,
+      url: `/api/voice/${voiceId}`,
+    });
+  });
+
+  req.on('error', () => {
+    if (!res.writableEnded) {
+      writeJsonResponse(res, 500, { error: 'Lỗi tải lên âm thanh.' });
+    }
+  });
+}
+
+function handleVoiceGetRequest(req, res, voiceId) {
+  const item = voiceStorage.get(voiceId);
+  if (!item) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Không tìm thấy đoạn ghi âm này.' }));
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': item.mimeType,
+    'Content-Length': item.buffer.length,
+    'Cache-Control': 'public, max-age=3600',
+    'Accept-Ranges': 'bytes',
+  });
+  res.end(item.buffer);
+}
+
 const httpServer = http.createServer((req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   const uploadMatch = /^\/api\/attachments\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
   if (req.method === 'POST' && uploadMatch) {
     handleAttachmentUploadRequest(req, res, uploadMatch[1]);
+    return;
+  }
+
+  // Voice recording endpoints
+  const voiceUploadMatch = requestUrl.pathname === '/api/voice/upload' || requestUrl.pathname === '/api/voice';
+  if (req.method === 'POST' && voiceUploadMatch) {
+    handleVoiceUploadRequest(req, res);
+    return;
+  }
+  const voiceGetMatch = /^\/api\/voice\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
+  if (req.method === 'GET' && voiceGetMatch) {
+    handleVoiceGetRequest(req, res, voiceGetMatch[1]);
     return;
   }
 
@@ -228,6 +321,53 @@ wss.on('error', (err) => {
  */
 const clients = new Map();
 const pendingChatMessages = new Map();
+
+// Lưu số lần cảnh cáo theo thiết bị trong thời gian server hoạt động
+const violationStrikes = new Map();
+
+const MAX_VIOLATION_STRIKES = 3;
+const STRIKE_TTL_MS = 24 * 60 * 60 * 1000; // 24 giờ
+
+function getStrikeKey(client) {
+  // deviceId được cung cấp từ client, chỉ dùng tạm cho bản thử nghiệm
+  if (!client.deviceId) return null;
+
+  return `device:${client.deviceId}`;
+}
+
+function addViolationStrike(client) {
+  const key = getStrikeKey(client);
+
+  // Nếu không có deviceId, dùng bộ đếm trên kết nối hiện tại
+  if (!key) {
+    client.warningCount = (client.warningCount || 0) + 1;
+    return client.warningCount;
+  }
+
+  const now = Date.now();
+  const previous = violationStrikes.get(key);
+
+  const count = previous && previous.expiresAt > now
+    ? previous.count + 1
+    : 1;
+
+  violationStrikes.set(key, {
+    count,
+    expiresAt: now + STRIKE_TTL_MS,
+  });
+
+  return count;
+}
+
+function clearViolationStrikes(client) {
+  const key = getStrikeKey(client);
+
+  if (key) {
+    violationStrikes.delete(key);
+  }
+
+  client.warningCount = 0;
+}
 
 // ─── Khởi tạo modules ─────────────────────────────────────────────────────
 
@@ -448,6 +588,7 @@ const messageHandlers = {
     client.interests = payload.interests;
     client.mood = payload.mood || 'ngau_nhien';
     client.deviceId = payload.deviceId || null;
+    client.warningCount = client.warningCount || 0; // đếm số lần cảnh cáo vi phạm
     console.log(`[Server] Join: ${payload.nickname} (${clientId}), deviceId=${client.deviceId}, mood=${client.mood}, interests=[${payload.interests.join(', ')}]`);
   },
 
@@ -531,35 +672,66 @@ const messageHandlers = {
       return;
     }
 
-    // 2. Kiểm tra bộ lọc từ ngữ khiếm nhã, thô tục, xúc phạm, chat đen
+    // 2. Kiểm tra bộ lọc nội dung phân tầng 4 cấp độ
     const filterResult = checkContent(payload.text);
     if (filterResult.isViolation) {
-      console.warn(`[Server] 🚫 Vi phạm nội dung cấm: ${client.nickname} (${clientId}) từ IP ${client.clientIp} - Từ ngữ: "${filterResult.matched}"`);
-
-      // Cấm tạm thời 10 phút cả ClientID lẫn IP
-      const banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
-      if (redisManager.isConnected) {
-        redisManager.addBlock(clientId, client.clientIp, 600);
+      // ════════ TẦNG 1: Tục tĩu nhẹ (PROFANITY) -> Che dấu sao, cho gửi tiếp ════════
+      if (filterResult.action === MODERATION_ACTIONS.MASK) {
+        payload.text = maskProfanity(payload.text);
       }
-
-      // Chặn cặp trong bộ nhớ tiến trình để người bị hại không gặp lại người vi phạm.
-      const partnerId = roomManager.getPartnerId(clientId);
-      if (partnerId) {
-        const partner = clients.get(partnerId);
-        if (partner) {
-          moderation.addPermanentBlock(partner, client);
-          partner.state = 'CONNECTED';
+      // ════════ TẦNG 2: Kể chuyện nhạy cảm / bạo lực -> Chặn tin, nhắc nhở sửa từ (Không ban) ════════
+      else if (filterResult.action === MODERATION_ACTIONS.BLOCK_WARN) {
+        sendTo(clientId, serverMsg.error(
+          'MESSAGE_BLOCKED',
+          `Tin nhắn của bạn chứa từ ngữ nhạy cảm ("${filterResult.matched}"). Vui lòng diễn đạt lại câu chuyện để tiếp tục trò chuyện nhé!`
+        ));
+        return; // Dừng lại, không gửi cho đối phương
+      }
+      // ════════ TẦNG 3: Xúc phạm danh dự / Gạ tình 18+ -> Cảnh cáo 3 lần mới ban ════════
+      else if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
+        const strikeCount = addViolationStrike(client)
+        if (strikeCount < MAX_VIOLATION_STRIKES) {
+          // Chưa đủ 3 lần -> Chặn tin nhắn + Cảnh cáo
+          sendTo(clientId, serverMsg.error(
+            'VIOLATION_WARNING',
+            `Cảnh báo (${strikeCount}/${MAX_VIOLATION_STRIKES}): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Tái phạm 3 lần bạn sẽ bị cấm 10 phút!`
+          ));
+          return;
         }
-        notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị hệ thống buộc rời khỏi phòng do vi phạm tiêu chuẩn cộng đồng (ngôn từ khiếm nhã).');
+        // Đã vi phạm lần thứ 3 -> Ban 10 phút & Kick
+        console.warn(`[Server] 🚫 Tái phạm 3 lần: ${client.nickname} (${clientId}) - Lý do: ${filterResult.category}`);
+        const banExpiresAt = moderation.ban(clientId, client.clientIp, `Tái phạm 3 lần: ${filterResult.category}`);
+        const partnerId = roomManager.getPartnerId(clientId);
+        if (partnerId) {
+          notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị hệ thống buộc rời phòng do tái phạm tiêu chuẩn cộng đồng nhiều lần.');
+        }
+        sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm tiêu chuẩn cộng đồng 3 lần.', banExpiresAt));
+        roomManager.removeClient(clientId);
+        client.state = 'CONNECTED';
+        clearViolationStrikes(client); // Reset sau khi ban
+        return;
       }
-
-      // Thông báo bị kick ngay lập tức cho người vi phạm
-      sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
-
-      // Xóa phòng chat
-      roomManager.removeClient(clientId);
-      client.state = 'CONNECTED';
-      return;
+      // ════════ TẦNG 4: Ma túy, Cờ bạc lừa đảo -> Chặn ngay + Ban 10 phút lập tức ════════
+      else if (filterResult.action === MODERATION_ACTIONS.INSTANT_BAN) {
+        console.warn(`[Server] 🚫 Vi phạm nghiêm trọng: ${client.nickname} (${clientId}) - ${filterResult.reason}`);
+        const banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
+        if (redisManager.isConnected) {
+          redisManager.addBlock(clientId, client.clientIp, 600);
+        }
+        const partnerId = roomManager.getPartnerId(clientId);
+        if (partnerId) {
+          const partner = clients.get(partnerId);
+          if (partner) {
+            moderation.addPermanentBlock(partner, client);
+            partner.state = 'CONNECTED';
+          }
+          notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị buộc rời khỏi phòng do vi phạm nghiêm trọng tiêu chuẩn an toàn.');
+        }
+        sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
+        roomManager.removeClient(clientId);
+        client.state = 'CONNECTED';
+        return;
+      }
     }
 
     // Kiểm tra nếu đang ở phòng trò chuyện cùng Bạn Đồng Hành Lumi
@@ -710,6 +882,87 @@ const messageHandlers = {
     sendTo(partnerId, serverMsg.typing(payload.isTyping));
   },
 
+  // ── voice ─────────────────────────────────────────────
+  [CLIENT_TYPES.VOICE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
+      return;
+    }
+    if (!moderation.checkRateLimit(clientId)) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+
+    // Nếu đang ở phòng Bạn Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const bot = roomManager.getBot(clientId);
+      if (bot) {
+        setTimeout(() => {
+          sendTo(clientId, serverMsg.message('Lumi đã nghe tin nhắn thoại của bạn rồi nè! 🎙️ Giọng bạn nghe rất ấm áp và dễ thương đó ✨', new Date().toISOString()));
+        }, 1200);
+      }
+      return;
+    }
+
+    const partnerId = roomManager.getPartnerId(clientId);
+    if (!partnerId) return;
+
+    sendTo(partnerId, serverMsg.voice({
+      voiceId: payload.voiceId,
+      url: payload.url,
+      duration: payload.duration,
+    }, timestamp));
+  },
+
+  // ── meme & sticker ────────────────────────────────────
+  [CLIENT_TYPES.MEME](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
+      return;
+    }
+    if (!moderation.checkRateLimit(clientId)) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const isSticker = Boolean(payload.isSticker);
+
+    // Nếu đang ở phòng Bạn Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const memeReplies = isSticker ? [
+        'Nhãn dán cưng xỉu luôn á! 🥰✨',
+        'Haha nhãn dán Douyin này đỉnh thật sự! 😂',
+        'U là trời, biểu cảm chuẩn không cần chỉnh 🤣',
+        'Nhãn dán siêu mặn mòi luôn bạn ơi! ✨',
+      ] : [
+        'Haha meme đỉnh chóp luôn á! 😂',
+        'U là trời, meme này chuẩn tâm trạng ghê 🤣',
+        'Meme mặn mòi quá bạn ơi! Lưu ngay vào bộ sưu tập ✨',
+        'Haha cưng xỉu luôn! 🐱✨',
+      ];
+      const reply = memeReplies[Math.floor(Math.random() * memeReplies.length)];
+      setTimeout(() => {
+        sendTo(clientId, serverMsg.message(reply, new Date().toISOString()));
+      }, 1000);
+      return;
+    }
+
+    const partnerId = roomManager.getPartnerId(clientId);
+    if (!partnerId) return;
+
+    sendTo(partnerId, serverMsg.meme({
+      url: payload.url,
+      title: payload.title,
+      memeId: payload.memeId,
+      isSticker,
+    }, timestamp));
+  },
+
   // ── skip ──────────────────────────────────────────────
   [CLIENT_TYPES.SKIP](clientId) {
     const client = clients.get(clientId);
@@ -768,6 +1021,35 @@ const messageHandlers = {
     matchmaker.enqueue(clientId, client.nickname, client.interests, client.mood, client.clientIp, client.deviceId);
 
     console.log(`[Server] Skip: ${client.nickname} (${clientId})`);
+  },
+
+  // ── leave_room (rời phòng quay về trang chủ) ───────────
+  [CLIENT_TYPES.LEAVE_ROOM](clientId) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state !== 'CHATTING') return;
+
+    // Nếu đang ở phòng Bot Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      roomManager.removeClient(clientId);
+      client.state = 'CONNECTED';
+      console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) rời phòng Bot về trang chủ`);
+      return;
+    }
+
+    // Nếu đang ở phòng người thật
+    const result = roomManager.removeClient(clientId);
+    if (result && result.partnerId) {
+      notifyRoomLeft(clientId, result.partnerId, 'Đối phương đã rời khỏi phòng chat.');
+      const partner = clients.get(result.partnerId);
+      if (partner) {
+        partner.state = 'CONNECTED';
+      }
+    }
+
+    client.state = 'CONNECTED';
+    console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) đã về trang chủ`);
   },
 
   // ── report ────────────────────────────────────────────

@@ -1,15 +1,21 @@
 <!DOCTYPE html>
 <html lang="vi" data-theme="dark">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>ChatMatch – Trạm Tần Số Trò Chuyện 1-1</title>
-  <meta name="description" content="Không gian ghép cặp ẩn danh 1-1 thời gian thực, trò chuyện cùng tần số và đấu cờ Caro trực tiếp qua WebSocket" />
+  <meta name="description"
+    content="Không gian ghép cặp ẩn danh 1-1 thời gian thực, trò chuyện cùng tần số và đấu cờ Caro trực tiếp qua WebSocket" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
   <div id="app">
     <!-- ═══════ Lớp ánh sáng nền & Hạt film nghệ thuật ═══════ -->
@@ -55,10 +61,12 @@
 
         <!-- Nút chuyển Giao diện & Âm thanh -->
         <div class="header-controls">
-          <button id="btn-theme-toggle" class="control-btn" type="button" title="Chuyển sang giao diện sáng" aria-label="Chuyển sang giao diện sáng">
+          <button id="btn-theme-toggle" class="control-btn" type="button" title="Chuyển sang giao diện sáng"
+            aria-label="Chuyển sang giao diện sáng">
             <span class="theme-icon" aria-hidden="true">☀️</span>
           </button>
-          <button id="btn-sound-toggle" class="control-btn" type="button" title="Bật/Tắt âm thanh hiệu ứng" aria-label="Bật tắt âm thanh">
+          <button id="btn-sound-toggle" class="control-btn" type="button" title="Bật/Tắt âm thanh hiệu ứng"
+            aria-label="Bật tắt âm thanh">
             <span class="sound-icon">🔔</span>
           </button>
         </div>
@@ -84,7 +92,8 @@
             </h2>
 
             <p class="showcase-lead">
-              Không cần đăng ký hay để lại thông tin gì cả. Chọn tâm trạng, chọn vài sở thích rồi vào tám chuyện, hỏi câu mở màn hoặc rủ làm ván cờ Caro giải khuây.
+              Không cần đăng ký hay để lại thông tin gì cả. Chọn tâm trạng, chọn vài sở thích rồi vào tám chuyện, hỏi
+              câu mở màn hoặc rủ làm ván cờ Caro giải khuây.
             </p>
           </div>
 
@@ -156,15 +165,10 @@
               </div>
 
               <div class="nickname-capsule">
-                <button type="button" id="user-avatar-preview" class="avatar-preview-badge" title="Bấm để đổi avatar">🦊</button>
-                <input
-                  type="text"
-                  id="input-nickname"
-                  placeholder="Nhập tên hoặc bấm nút ngẫu nhiên…"
-                  maxlength="30"
-                  autocomplete="off"
-                  autofocus
-                />
+                <button type="button" id="user-avatar-preview" class="avatar-preview-badge"
+                  title="Bấm để đổi avatar">🦊</button>
+                <input type="text" id="input-nickname" placeholder="Nhập tên hoặc bấm nút ngẫu nhiên…" maxlength="30"
+                  autocomplete="off" autofocus />
                 <button id="btn-random-name" type="button" class="btn-dice-inline" title="Tạo biệt danh ngẫu nhiên">
                   <span>🎲</span> Đổi tên
                 </button>
@@ -249,11 +253,13 @@
                 <label class="interest-chip"><input type="checkbox" value="phim ảnh" /><span>🎬 Phim ảnh</span></label>
                 <label class="interest-chip"><input type="checkbox" value="game" /><span>🎮 Game</span></label>
                 <label class="interest-chip"><input type="checkbox" value="thể thao" /><span>⚽ Thể thao</span></label>
-                <label class="interest-chip"><input type="checkbox" value="công nghệ" /><span>💻 Công nghệ</span></label>
+                <label class="interest-chip"><input type="checkbox" value="công nghệ" /><span>💻 Công
+                    nghệ</span></label>
                 <label class="interest-chip"><input type="checkbox" value="du lịch" /><span>✈️ Du lịch</span></label>
                 <label class="interest-chip"><input type="checkbox" value="ẩm thực" /><span>🍜 Ăn uống</span></label>
                 <label class="interest-chip"><input type="checkbox" value="sách" /><span>📚 Sách truyện</span></label>
-                <label class="interest-chip"><input type="checkbox" value="nghệ thuật" /><span>🎨 Nghệ thuật</span></label>
+                <label class="interest-chip"><input type="checkbox" value="nghệ thuật" /><span>🎨 Nghệ
+                    thuật</span></label>
                 <label class="interest-chip"><input type="checkbox" value="lập trình" /><span>👨‍💻 Code</span></label>
               </div>
             </div>
@@ -264,7 +270,8 @@
                 <span class="btn-text">Tìm bạn trò chuyện</span>
                 <span class="btn-arrow" aria-hidden="true">→</span>
               </button>
-              <button id="btn-start-solo" class="btn btn-solo btn-large" type="button" title="Tâm sự hoặc chơi cờ cùng bạn ảo Lumi">
+              <button id="btn-start-solo" class="btn btn-solo btn-large" type="button"
+                title="Tâm sự hoặc chơi cờ cùng bạn ảo Lumi">
                 <span class="solo-badge-tag">AI</span>
                 <span class="btn-text">Nói chuyện với Lumi</span>
               </button>
@@ -305,13 +312,15 @@
         <!-- Mẹo chờ xoay vòng -->
         <div class="waiting-fun-fact">
           <span class="fact-icon">💡</span>
-          <span id="rotating-fact-text" class="fact-text">Mẹo: Chọn sở thích giúp bạn dễ gặp người hợp cạ hơn đấy!</span>
+          <span id="rotating-fact-text" class="fact-text">Mẹo: Chọn sở thích giúp bạn dễ gặp người hợp cạ hơn
+            đấy!</span>
         </div>
 
         <!-- Gợi ý vào phòng cùng Trợ lý Lumi khi phòng vắng -->
         <div id="solo-hint-box" class="solo-hint-box hidden">
           <div class="solo-hint-badge">✨ PHÒNG HƠI VẮNG</div>
-          <p class="solo-hint-msg">Hiện tại chưa có ai rảnh... Bạn có muốn vào nói chuyện hoặc làm ván cờ với <strong>Lumi</strong> luôn không?</p>
+          <p class="solo-hint-msg">Hiện tại chưa có ai rảnh... Bạn có muốn vào nói chuyện hoặc làm ván cờ với
+            <strong>Lumi</strong> luôn không?</p>
           <button id="btn-accept-solo" class="btn btn-solo btn-small">
             🤖 Chat &amp; chơi cờ với Lumi
           </button>
@@ -338,8 +347,10 @@
               <div class="partner-details">
                 <div class="partner-name-row">
                   <span id="partner-nickname" class="partner-name">Đang tải…</span>
-                  <button type="button" id="bot-badge" class="bot-badge hidden" title="Bấm để xem giới thiệu Lumi">🤖 Bạn ảo Lumi</button>
-                  <button type="button" id="partner-mood" class="partner-mood-tag hidden" title="Xem tâm trạng của bạn này">
+                  <button type="button" id="bot-badge" class="bot-badge hidden" title="Bấm để xem giới thiệu Lumi">🤖
+                    Bạn ảo Lumi</button>
+                  <button type="button" id="partner-mood" class="partner-mood-tag hidden"
+                    title="Xem tâm trạng của bạn này">
                     <span class="mood-tag-icon">💭</span>
                     <span id="partner-mood-text" class="mood-tag-text">Đang lắng nghe</span>
                     <span class="mood-tag-info">ℹ️</span>
@@ -350,7 +361,8 @@
             </div>
 
             <div class="chat-actions">
-              <button id="btn-icebreaker" class="btn btn-action-icebreaker btn-small" title="Gợi ý câu mở đầu đỡ ngượng">
+              <button id="btn-icebreaker" class="btn btn-action-icebreaker btn-small"
+                title="Gợi ý câu mở đầu đỡ ngượng">
                 <span class="action-icon">🎲</span> <span class="action-label">Gợi ý bắt chuyện</span>
               </button>
               <button id="btn-minigame" class="btn btn-action-game btn-small" title="Rủ chơi cờ Caro 1-1">
@@ -359,7 +371,12 @@
               <button id="btn-skip" class="btn btn-warning btn-small" title="Đổi sang người khác (Phím tắt: Esc)">
                 <span class="action-icon">⏭️</span> Bỏ qua <kbd class="kbd-hint">Esc</kbd>
               </button>
-              <button id="btn-report" class="btn btn-danger btn-icon-round" title="Báo cáo người này" aria-label="Báo cáo">
+              <!-- THÊM NÚT NÀY VÀO ĐÂY: Nút Rời phòng về trang chủ -->
+              <button id="btn-leave-room" class="btn btn-secondary btn-small" title="Rời phòng về trang chủ">
+                <span class="action-icon">🚪</span> <span class="action-label">Rời phòng</span>
+              </button>
+              <button id="btn-report" class="btn btn-danger btn-icon-round" title="Báo cáo người này"
+                aria-label="Báo cáo">
                 <span class="action-icon">🚩</span>
               </button>
             </div>
@@ -396,6 +413,74 @@
 
           <!-- Cụm Soạn Thảo Nổi (Floating Composer Dock) -->
           <div class="chat-composer-dock">
+            <!-- Khay gợi ý Nhãn dán theo từ khóa -->
+            <div id="meme-suggestions-bar" class="meme-suggestions-bar hidden" aria-label="Gợi ý nhãn dán">
+              <div class="meme-suggestions-header">
+                <span class="meme-tag-badge">✨ Gợi ý nhãn dán: <b id="meme-keyword-highlight">...</b></span>
+                <button id="btn-close-meme-suggestions" type="button" class="btn-close-mini" title="Đóng gợi ý">✕</button>
+              </div>
+              <!-- Danh sách Nhãn dán gợi ý theo từ khóa (Sticker động) -->
+              <div id="meme-suggestions-list" class="meme-suggestions-list">
+                <!-- Render động các Nhãn dán theo từ khóa -->
+              </div>
+            </div>
+
+            <!-- Khay Biểu Tượng & Nhãn Dán Popover (iOS Emoji & Stickers) -->
+            <div id="emoji-picker-popover" class="emoji-picker-popover hidden" role="dialog" aria-label="Bảng biểu tượng và nhãn dán">
+              <!-- Bộ chuyển chế độ: Emoji iOS vs Nhãn dán -->
+              <div class="picker-mode-switcher" id="picker-mode-switcher">
+                <button type="button" class="picker-mode-tab active" id="tab-picker-emoji" data-mode="emoji">😃 Biểu tượng</button>
+                <button type="button" class="picker-mode-tab" id="tab-picker-stickers" data-mode="stickers">✨ Nhãn dán</button>
+                <button type="button" id="btn-close-emoji-picker" class="btn-close-mini" title="Đóng">✕</button>
+              </div>
+
+              <!-- Nội dung Chế độ Emoji iOS -->
+              <div id="picker-emoji-view" class="picker-view-panel">
+                <div class="emoji-picker-header">
+                  <input type="text" id="input-emoji-search" class="emoji-search-input" placeholder="🔍 Tìm kiếm emoji (cười, tim, khóc...)" />
+                </div>
+                <div id="emoji-grid-container" class="emoji-grid-container">
+                  <!-- Danh mục emoji iOS render động -->
+                </div>
+                <div class="emoji-category-tabs" id="emoji-category-tabs">
+                  <button type="button" class="emoji-tab-btn active" data-cat="recent" title="Thường dùng">🕒</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="smileys" title="Mặt cười">😀</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="animals" title="Động vật">🐶</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="food" title="Đồ ăn">🍔</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="activity" title="Hoạt động">⚽</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="objects" title="Biểu tượng">💡</button>
+                </div>
+              </div>
+
+              <!-- Nội dung Chế độ Nhãn dán (Sticker Pack) -->
+              <div id="picker-sticker-view" class="picker-view-panel hidden">
+                <div class="sticker-pack-header">
+                  <span class="sticker-pack-title" id="sticker-current-pack-title">🟡 Douyin Classic</span>
+                </div>
+                <div id="sticker-grid-container" class="sticker-grid-container">
+                  <!-- Nhãn dán render động -->
+                </div>
+                <div class="sticker-pack-tabs" id="sticker-pack-tabs">
+                  <button type="button" class="sticker-pack-tab-btn active" data-pack="douyin" title="Douyin Classic">
+                    <img src="/assets/stickers/douyin/weixiao.png" alt="Douyin" class="sticker-tab-icon" />
+                    <span>Douyin</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="cats" title="Mèo Viral">
+                    <span class="sticker-tab-emoji">🐱</span>
+                    <span>Mèo</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="pandas" title="Gấu Trúc Douyin">
+                    <span class="sticker-tab-emoji">🐼</span>
+                    <span>Gấu Trúc</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="pepe" title="Pepe & Động Vật">
+                    <span class="sticker-tab-emoji">🐸</span>
+                    <span>Pepe</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div class="quick-emoji-bar">
               <span class="quick-emoji-hint">Cảm xúc:</span>
               <div class="quick-emoji-list" id="quick-emoji-list">
@@ -411,40 +496,96 @@
             </div>
 
             <div class="chat-input-area">
-              <input
-                type="file"
-                id="input-attachment"
-                class="visually-hidden"
-                accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-              />
-              <button id="btn-attachment" class="btn btn-secondary btn-attachment" type="button" title="Gửi ảnh hoặc file" aria-label="Gửi file" aria-describedby="attachment-disclaimer">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 0 1 5.66 5.66l-9.9 9.9a2 2 0 0 1-2.83-2.83l9.2-9.19"/>
+              <input type="file" id="input-attachment" class="visually-hidden"
+                accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+              
+              <!-- Nút Mở Emoji iPhone -->
+              <button id="btn-emoji-toggle" class="btn btn-secondary btn-icon-round composer-tool-btn" type="button"
+                title="Chọn biểu tượng iPhone Emoji" aria-label="iPhone Emoji">
+                <span class="composer-icon">😀</span>
+              </button>
+
+              <!-- Nút Mở Nhãn Dán (Sticker Pack) -->
+              <button id="btn-sticker-toggle" class="btn btn-secondary btn-icon-round composer-tool-btn" type="button"
+                title="Chọn nhãn dán động" aria-label="Nhãn dán">
+                <span class="composer-icon">✨</span>
+              </button>
+
+              <!-- Nút Gửi File / Ảnh -->
+              <button id="btn-attachment" class="btn btn-secondary btn-attachment composer-tool-btn" type="button"
+                title="Gửi ảnh hoặc file" aria-label="Gửi file" aria-describedby="attachment-disclaimer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true">
+                  <path
+                    d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 0 1 5.66 5.66l-9.9 9.9a2 2 0 0 1-2.83-2.83l9.2-9.19" />
+                </svg>
+              </button>
+
+              <!-- Nút Ghi Âm Voice (Bấm một lần để bật hoặc Giữ để nói) -->
+              <button id="btn-voice" class="btn btn-secondary btn-voice composer-tool-btn" type="button"
+                title="Bấm hoặc giữ để gửi tin nhắn thoại (Voice)" aria-label="Ghi âm giọng nói">
+                <svg class="mic-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
                 </svg>
               </button>
 
               <div class="chat-input-wrapper">
-                <textarea
-                  id="input-message"
-                  placeholder="Nhập tin nhắn… (Enter để gửi, Shift+Enter xuống dòng)"
-                  maxlength="500"
-                  rows="1"
-                ></textarea>
+                <textarea id="input-message" placeholder="Nhập tin nhắn… (Enter để gửi, Shift+Enter xuống dòng)"
+                  maxlength="500" rows="1"></textarea>
                 <div class="input-meta">
                   <span class="char-count"><span id="char-current">0</span>/500</span>
                 </div>
               </div>
 
-              <button id="btn-send" class="btn btn-primary btn-send-message" title="Gửi tin nhắn (Enter)" aria-label="Gửi tin nhắn">
-                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <button id="btn-send" class="btn btn-primary btn-send-message" title="Gửi tin nhắn (Enter)"
+                aria-label="Gửi tin nhắn">
+                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" stroke-linejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13"></line>
                   <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
               </button>
+
+              <!-- Thanh Ghi Âm Trực Tiếp (Voice Recording Live Bar) -->
+              <div id="voice-recording-bar" class="voice-recording-bar hidden" role="region" aria-label="Đang ghi âm">
+                <div class="voice-rec-left">
+                  <span class="voice-rec-pulse" aria-hidden="true"></span>
+                  <span id="voice-rec-timer" class="voice-rec-timer">00:00</span>
+                  <div class="voice-wave-visualizer" id="voice-wave-visualizer" aria-hidden="true">
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                  </div>
+                  <span class="voice-rec-hint" id="voice-rec-hint">Đang ghi âm…</span>
+                </div>
+                <div class="voice-rec-actions">
+                  <button id="btn-voice-cancel" type="button" class="btn btn-voice-action btn-voice-cancel" title="Hủy bỏ ghi âm">
+                    <span class="btn-voice-icon">✕</span>
+                    <span class="btn-voice-lbl">Hủy</span>
+                  </button>
+                  <button id="btn-voice-send" type="button" class="btn btn-voice-action btn-voice-send" title="Dừng &amp; Gửi tin nhắn thoại">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                    <span class="btn-voice-lbl">Gửi</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div id="attachment-status" class="attachment-status hidden" role="status" aria-live="polite"></div>
-            <p id="attachment-disclaimer" class="attachment-disclaimer">File sẽ được quét mã độc trước khi gửi. Link tải hết hạn sau 24h.</p>
+            <p id="attachment-disclaimer" class="attachment-disclaimer">File sẽ được quét mã độc trước khi gửi. Link tải
+              hết hạn sau 24h.</p>
           </div>
         </div>
 
@@ -492,13 +633,10 @@
       <div class="modal-content">
         <div class="modal-header-icon danger">🚩</div>
         <h3>Báo cáo vi phạm</h3>
-        <p>Nếu người này làm phiền hay nói năng thô lỗ, bạn hãy gửi lý do nhé. Hệ thống sẽ tạm chặn hai người gặp lại nhau trong 5 phút:</p>
-        <textarea
-          id="input-report-reason"
-          placeholder="Lý do báo cáo (ví dụ: chửi bậy, quấy rối, gửi link rác…)"
-          maxlength="200"
-          rows="3"
-        ></textarea>
+        <p>Nếu người này làm phiền hay nói năng thô lỗ, bạn hãy gửi lý do nhé. Hệ thống sẽ tạm chặn hai người gặp lại
+          nhau trong 5 phút:</p>
+        <textarea id="input-report-reason" placeholder="Lý do báo cáo (ví dụ: chửi bậy, quấy rối, gửi link rác…)"
+          maxlength="200" rows="3"></textarea>
         <div class="modal-actions">
           <button id="btn-report-cancel" class="btn btn-secondary">Thôi</button>
           <button id="btn-report-submit" class="btn btn-danger">Báo cáo &amp; Chặn</button>
@@ -512,7 +650,8 @@
       <div class="modal-content">
         <div class="modal-header-icon primary">⚔️</div>
         <h3>Có người rủ chơi Caro!</h3>
-        <p id="game-invite-description"><b id="game-inviter-name">Bạn kia</b> vừa rủ bạn làm một ván cờ Caro cho vui.</p>
+        <p id="game-invite-description"><b id="game-inviter-name">Bạn kia</b> vừa rủ bạn làm một ván cờ Caro cho vui.
+        </p>
         <div class="modal-actions">
           <button id="btn-game-decline" class="btn btn-secondary">Để sau</button>
           <button id="btn-game-accept" class="btn btn-primary">Chơi luôn ⚔️</button>
@@ -560,7 +699,8 @@
           <span id="modal-profile-mood-pill" class="profile-mood-pill">Lắng nghe &amp; chia sẻ</span>
         </div>
         <p id="modal-profile-desc" class="profile-desc">
-          Lumi luôn sẵn sàng lắng nghe mọi chuyện của bạn bất kể lúc nào. Bạn có thể tâm sự chuyện buồn vui hoặc rủ Lumi đánh cờ Caro giải trí nhé!
+          Lumi luôn sẵn sàng lắng nghe mọi chuyện của bạn bất kể lúc nào. Bạn có thể tâm sự chuyện buồn vui hoặc rủ Lumi
+          đánh cờ Caro giải trí nhé!
         </p>
         <div class="profile-interests-box">
           <span class="profile-label">Chủ đề yêu thích</span>
@@ -572,10 +712,25 @@
       </div>
     </div>
 
+    <!-- ═══════ Modal Xác Nhận Rời Phòng ═══════ -->
+    <div id="modal-leave-confirm" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header-icon danger">🚪</div>
+        <h3>Rời cuộc trò chuyện?</h3>
+        <p>Bạn có chắc chắn muốn kết thúc cuộc trò chuyện này và quay lại trang chủ không?</p>
+        <div class="modal-actions">
+          <button id="btn-cancel-leave" class="btn btn-secondary" type="button">Ở lại</button>
+          <button id="btn-confirm-leave" class="btn btn-danger" type="button">Rời phòng</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══════ Khay Thông Báo Nổi (Toast) ═══════ -->
     <div id="toast-container" class="toast-container"></div>
   </div>
 
   <script src="script.js"></script>
 </body>
+
 </html>
