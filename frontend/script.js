@@ -79,6 +79,33 @@ const el = {
   inputAttachment: $('#input-attachment'),
   btnAttachment: $('#btn-attachment'),
   attachmentStatus: $('#attachment-status'),
+  btnVoice: $('#btn-voice'),
+  voiceRecordingBar: $('#voice-recording-bar'),
+  voiceRecTimer: $('#voice-rec-timer'),
+  voiceWaveVisualizer: $('#voice-wave-visualizer'),
+  voiceRecHint: $('#voice-rec-hint'),
+  btnVoiceCancel: $('#btn-voice-cancel'),
+  btnVoiceSend: $('#btn-voice-send'),
+  btnEmojiToggle: $('#btn-emoji-toggle'),
+  btnStickerToggle: $('#btn-sticker-toggle'),
+  emojiPickerPopover: $('#emoji-picker-popover'),
+  tabPickerEmoji: $('#tab-picker-emoji'),
+  tabPickerStickers: $('#tab-picker-stickers'),
+  pickerEmojiView: $('#picker-emoji-view'),
+  pickerStickerView: $('#picker-sticker-view'),
+  stickerGridContainer: $('#sticker-grid-container'),
+  stickerPackTabs: $('#sticker-pack-tabs'),
+  stickerCurrentPackTitle: $('#sticker-current-pack-title'),
+  inputEmojiSearch: $('#input-emoji-search'),
+  btnCloseEmojiPicker: $('#btn-close-emoji-picker'),
+  emojiGridContainer: $('#emoji-grid-container'),
+  emojiCategoryTabs: $('#emoji-category-tabs'),
+  memeSuggestionsBar: $('#meme-suggestions-bar'),
+  memeKeywordHighlight: $('#meme-keyword-highlight'),
+  suggestedEmojisRow: $('#suggested-emojis-row'),
+  suggestedEmojisList: $('#suggested-emojis-list'),
+  memeSuggestionsList: $('#meme-suggestions-list'),
+  btnCloseMemeSuggestions: $('#btn-close-meme-suggestions'),
   btnSkip: $('#btn-skip'),
   btnReport: $('#btn-report'),
   charCurrent: $('#char-current'),
@@ -392,6 +419,18 @@ function switchScreen(screen) {
   el.screenWaiting.classList.remove('active');
   el.screenChat.classList.remove('active');
 
+  if (screen !== 'chat') {
+    if (typeof cancelVoiceRecording === 'function') cancelVoiceRecording();
+    if (el.emojiPickerPopover) el.emojiPickerPopover.classList.add('hidden');
+    if (el.memeSuggestionsBar) el.memeSuggestionsBar.classList.add('hidden');
+    if (currentPlayingAudio) {
+      currentPlayingAudio.pause();
+      if (currentPlayingResetFn) currentPlayingResetFn();
+      currentPlayingAudio = null;
+      currentPlayingResetFn = null;
+    }
+  }
+
   currentScreen = screen;
 
   switch (screen) {
@@ -687,6 +726,20 @@ function handleMessage(raw) {
 
     case 'message':
       appendMessage(payload.text, 'received', payload.timestamp, payload.linkSafety);
+      playMessageSound();
+      break;
+
+    case 'voice':
+      appendVoiceMessage(payload, 'received', payload.timestamp);
+      playMessageSound();
+      break;
+
+    case 'meme':
+      if (payload.isSticker) {
+        appendStickerMessage(payload.url, payload.title, 'received', payload.timestamp);
+      } else {
+        appendMemeMessage(payload.url, payload.title, 'received', payload.timestamp);
+      }
       playMessageSound();
       break;
 
@@ -1122,6 +1175,232 @@ function appendMessage(text, direction, timestamp, linkSafety = null) {
   scrollToBottom();
 }
 
+// ─── Voice Audio Player & Messages ──────────────────────────────────────────
+let currentPlayingAudio = null;
+let currentPlayingResetFn = null;
+
+function appendVoiceMessage(voiceData, direction, timestamp) {
+  if (!voiceData || typeof voiceData.url !== 'string') return;
+
+  const bubble = document.createElement('div');
+  bubble.className = `message-bubble ${direction} voice-message-bubble`;
+
+  const card = document.createElement('div');
+  card.className = 'message-voice-player';
+
+  const btnPlay = document.createElement('button');
+  btnPlay.type = 'button';
+  btnPlay.className = 'voice-play-btn';
+  btnPlay.title = 'Phát / Tạm dừng tin nhắn thoại';
+  btnPlay.setAttribute('aria-label', 'Phát tin nhắn thoại');
+  btnPlay.innerHTML = `
+    <svg class="icon-play" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+      <polygon points="6 4 20 12 6 20 6 4"></polygon>
+    </svg>
+    <svg class="icon-pause hidden" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+      <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+      <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+    </svg>
+  `;
+
+  const trackWrap = document.createElement('div');
+  trackWrap.className = 'voice-track-wrap';
+
+  const waveBarsContainer = document.createElement('div');
+  waveBarsContainer.className = 'voice-bars-container';
+  const barHeights = [30, 60, 45, 80, 100, 70, 90, 50, 75, 95, 60, 85, 40, 70, 50, 30];
+  const barElements = [];
+  barHeights.forEach((h) => {
+    const bar = document.createElement('span');
+    bar.className = 'voice-bar';
+    bar.style.height = `${h}%`;
+    waveBarsContainer.appendChild(bar);
+    barElements.push(bar);
+  });
+
+  const progressLine = document.createElement('div');
+  progressLine.className = 'voice-progress-fill';
+  trackWrap.appendChild(waveBarsContainer);
+  trackWrap.appendChild(progressLine);
+
+  const durationText = document.createElement('span');
+  durationText.className = 'voice-duration';
+  const totalSeconds = Number(voiceData.duration) || 0;
+  const formatSec = (s) => {
+    const secVal = Math.max(0, Math.round(s));
+    const mins = Math.floor(secVal / 60);
+    const secs = secVal % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+  durationText.textContent = formatSec(totalSeconds);
+
+  card.appendChild(btnPlay);
+  card.appendChild(trackWrap);
+  card.appendChild(durationText);
+  bubble.appendChild(card);
+
+  if (timestamp) {
+    const time = document.createElement('div');
+    time.className = 'message-time';
+    time.textContent = formatTime(timestamp);
+    bubble.appendChild(time);
+  }
+
+  el.chatMessages.appendChild(bubble);
+  scrollToBottom();
+
+  const audio = new Audio(voiceData.url);
+  audio.preload = 'metadata';
+
+  audio.addEventListener('loadedmetadata', () => {
+    if (!totalSeconds && audio.duration && Number.isFinite(audio.duration)) {
+      durationText.textContent = formatSec(audio.duration);
+    }
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    const dur = audio.duration || totalSeconds || 1;
+    const ratio = Math.min(1, Math.max(0, audio.currentTime / dur));
+    progressLine.style.width = `${ratio * 100}%`;
+    durationText.textContent = formatSec(audio.currentTime);
+
+    const activeCount = Math.floor(ratio * barElements.length);
+    barElements.forEach((bar, idx) => {
+      bar.classList.toggle('active', idx <= activeCount);
+    });
+  });
+
+  const resetPlayBtn = () => {
+    const playIcon = btnPlay.querySelector('.icon-play');
+    const pauseIcon = btnPlay.querySelector('.icon-pause');
+    if (playIcon) playIcon.classList.remove('hidden');
+    if (pauseIcon) pauseIcon.classList.add('hidden');
+    btnPlay.classList.remove('playing');
+  };
+
+  const setPlayingState = () => {
+    const playIcon = btnPlay.querySelector('.icon-play');
+    const pauseIcon = btnPlay.querySelector('.icon-pause');
+    if (playIcon) playIcon.classList.add('hidden');
+    if (pauseIcon) pauseIcon.classList.remove('hidden');
+    btnPlay.classList.add('playing');
+  };
+
+  audio.addEventListener('ended', () => {
+    resetPlayBtn();
+    progressLine.style.width = '0%';
+    durationText.textContent = formatSec(audio.duration || totalSeconds);
+    barElements.forEach((bar) => bar.classList.remove('active'));
+    currentPlayingAudio = null;
+    currentPlayingResetFn = null;
+  });
+
+  btnPlay.addEventListener('click', () => {
+    if (audio.paused) {
+      if (currentPlayingAudio && currentPlayingAudio !== audio) {
+        currentPlayingAudio.pause();
+        if (currentPlayingResetFn) currentPlayingResetFn();
+      }
+      currentPlayingAudio = audio;
+      currentPlayingResetFn = resetPlayBtn;
+      audio.play().then(() => {
+        setPlayingState();
+      }).catch((e) => {
+        console.warn('[Voice] Phát âm thanh thất bại:', e);
+        showToast('Không thể phát tin nhắn thoại này.', 'warning');
+      });
+    } else {
+      audio.pause();
+      resetPlayBtn();
+      currentPlayingAudio = null;
+      currentPlayingResetFn = null;
+    }
+  });
+
+  trackWrap.addEventListener('click', (e) => {
+    const rect = trackWrap.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+    const dur = audio.duration || totalSeconds;
+    if (dur && Number.isFinite(dur)) {
+      audio.currentTime = ratio * dur;
+    }
+  });
+}
+
+// ─── Sticker & Meme Message Rendering ──────────────────────────────────────────
+/** Hiển thị tin nhắn Nhãn dán trong suốt (Sticker Bubble) */
+function appendStickerMessage(url, title, direction, timestamp) {
+  if (!url || typeof url !== 'string') return;
+
+  const bubble = document.createElement('div');
+  bubble.className = `message-bubble ${direction} sticker-message-bubble`;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'message-sticker-wrap';
+
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = title || 'Sticker';
+  img.title = title || 'Nhãn dán';
+  img.className = 'sticker-bubble-image';
+  img.loading = 'lazy';
+
+  wrap.appendChild(img);
+
+  if (timestamp) {
+    const time = document.createElement('div');
+    time.className = 'sticker-meta-time';
+    time.textContent = formatTime(timestamp);
+    wrap.appendChild(time);
+  }
+
+  bubble.appendChild(wrap);
+  el.chatMessages.appendChild(bubble);
+  scrollToBottom();
+}
+
+function appendMemeMessage(url, title, direction, timestamp) {
+  if (!url || typeof url !== 'string') return;
+
+  const bubble = document.createElement('div');
+  bubble.className = `message-bubble ${direction} meme-message-bubble`;
+
+  const card = document.createElement('div');
+  card.className = 'message-meme-card';
+
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = title || 'Meme GIF';
+  img.className = 'meme-image';
+  img.loading = 'lazy';
+
+  img.addEventListener('click', () => {
+    window.open(url, '_blank');
+  });
+
+  card.appendChild(img);
+
+  if (title) {
+    const caption = document.createElement('div');
+    caption.className = 'meme-caption';
+    caption.textContent = title;
+    card.appendChild(caption);
+  }
+
+  bubble.appendChild(card);
+
+  if (timestamp) {
+    const time = document.createElement('div');
+    time.className = 'message-time';
+    time.textContent = formatTime(timestamp);
+    bubble.appendChild(time);
+  }
+
+  el.chatMessages.appendChild(bubble);
+  scrollToBottom();
+}
+
 function formatFileSize(size) {
   if (!Number.isFinite(size) || size <= 0) return 'Kích thước không xác định';
   return size >= 1024 * 1024
@@ -1518,6 +1797,7 @@ function sendMessage() {
   // Auto-resize
   el.inputMessage.style.height = 'auto';
   el.inputMessage.focus();
+  hideMemeSuggestions();
 }
 
 el.btnSend.addEventListener('click', sendMessage);
@@ -1548,6 +1828,7 @@ el.inputMessage.addEventListener('input', () => {
   el.inputMessage.style.height = Math.min(el.inputMessage.scrollHeight, 120) + 'px';
 
   handleLocalTyping();
+  checkMemeSuggestions(el.inputMessage.value);
 });
 
 // ── Quick Emoji Bar ────────────────────────────────
@@ -1825,6 +2106,1020 @@ if (el.btnReconnectNow) {
     }
     connect();
   });
+}
+
+// ═══════════════════════════════════════════════════
+// TÍNH NĂNG 1: GHI ÂM TIN NHẮN THOẠI (VOICE MESSAGE)
+// Bấm để nói hoặc Giữ để nói (Push-to-Talk)
+// ═══════════════════════════════════════════════════
+
+let mediaRecorder = null;
+let recordedAudioChunks = [];
+let recordingTimerInterval = null;
+let recordingSeconds = 0;
+let isRecordingActive = false;
+let isHoldRecording = false;
+let holdTimeout = null;
+let audioStream = null;
+
+async function startVoiceRecording(isHold = false) {
+  if (isRecordingActive) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('Trình duyệt của bạn không hỗ trợ ghi âm trực tiếp.', 'error');
+    return;
+  }
+
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    console.warn('[Voice] getUserMedia error:', err);
+    showToast('⚠️ Vui lòng cấp quyền truy cập micro để gửi tin nhắn thoại!', 'warning');
+    return;
+  }
+
+  recordedAudioChunks = [];
+  const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find((t) => {
+    return window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t);
+  }) || '';
+
+  try {
+    mediaRecorder = mimeType ? new MediaRecorder(audioStream, { mimeType }) : new MediaRecorder(audioStream);
+  } catch (err) {
+    mediaRecorder = new MediaRecorder(audioStream);
+  }
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      recordedAudioChunks.push(e.data);
+    }
+  };
+
+  mediaRecorder.onstop = () => {
+    if (audioStream) {
+      audioStream.getTracks().forEach((track) => track.stop());
+      audioStream = null;
+    }
+  };
+
+  mediaRecorder.start(100);
+  isRecordingActive = true;
+  isHoldRecording = isHold;
+  recordingSeconds = 0;
+
+  if (el.voiceRecordingBar) {
+    el.voiceRecordingBar.classList.remove('hidden');
+    if (el.voiceRecTimer) el.voiceRecTimer.textContent = '00:00';
+    if (el.voiceRecHint) {
+      el.voiceRecHint.textContent = isHold ? 'Đang giữ để nói… (thả để gửi)' : 'Đang ghi âm… (bấm Gửi khi xong)';
+    }
+  }
+
+  playTone(550, 'sine', 0.05, 0.05);
+
+  clearInterval(recordingTimerInterval);
+  recordingTimerInterval = setInterval(() => {
+    recordingSeconds += 1;
+    const mins = Math.floor(recordingSeconds / 60).toString().padStart(2, '0');
+    const secs = (recordingSeconds % 60).toString().padStart(2, '0');
+    if (el.voiceRecTimer) el.voiceRecTimer.textContent = `${mins}:${secs}`;
+
+    // Tối đa 120s tự động dừng và gửi
+    if (recordingSeconds >= 120) {
+      stopVoiceRecordingAndSend();
+    }
+  }, 1000);
+}
+
+function cancelVoiceRecording() {
+  if (!isRecordingActive) return;
+  clearInterval(recordingTimerInterval);
+  isRecordingActive = false;
+  isHoldRecording = false;
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  recordedAudioChunks = [];
+
+  if (el.voiceRecordingBar) {
+    el.voiceRecordingBar.classList.add('hidden');
+  }
+  showToast('Đã hủy đoạn ghi âm.', 'info');
+}
+
+async function stopVoiceRecordingAndSend() {
+  if (!isRecordingActive) return;
+  clearInterval(recordingTimerInterval);
+  const duration = Math.max(1, recordingSeconds);
+  isRecordingActive = false;
+  isHoldRecording = false;
+
+  if (el.voiceRecordingBar) {
+    el.voiceRecordingBar.classList.add('hidden');
+  }
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+
+  if (duration < 1 && recordedAudioChunks.length === 0) {
+    showToast('Đoạn ghi âm quá ngắn.', 'warning');
+    return;
+  }
+
+  // Chờ chunk cuối cùng hoàn tất
+  await new Promise((r) => setTimeout(r, 120));
+
+  const audioBlob = new Blob(recordedAudioChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+  if (audioBlob.size === 0) {
+    showToast('Không có dữ liệu âm thanh.', 'warning');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/voice/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': audioBlob.type || 'audio/webm',
+      },
+      body: audioBlob,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.ok || !data.voiceId) {
+      throw new Error(data.error || 'Upload voice thất bại');
+    }
+
+    // Gửi qua WebSocket
+    send('voice', {
+      voiceId: data.voiceId,
+      url: data.url,
+      duration,
+    });
+
+    // Hiển thị ở phía mình
+    appendVoiceMessage({
+      voiceId: data.voiceId,
+      url: data.url,
+      duration,
+    }, 'sent', new Date().toISOString());
+
+    playTone(600, 'sine', 0.06, 0.06);
+  } catch (err) {
+    console.error('[Voice] Upload error:', err);
+    showToast('Không thể gửi tin nhắn thoại. Vui lòng thử lại!', 'error');
+  }
+}
+
+// Gắn sự kiện cho nút Micro (Push-to-Talk & Click-to-Talk)
+if (el.btnVoice) {
+  let touchStartY = 0;
+  let isHoldTriggered = false;
+
+  el.btnVoice.addEventListener('click', () => {
+    if (isHoldTriggered) {
+      isHoldTriggered = false;
+      return;
+    }
+    if (isRecordingActive) {
+      stopVoiceRecordingAndSend();
+    } else {
+      startVoiceRecording(false);
+    }
+  });
+
+  // Giữ chuột để nói trên máy tính (Desktop)
+  el.btnVoice.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    isHoldTriggered = false;
+    holdTimeout = setTimeout(() => {
+      isHoldTriggered = true;
+      startVoiceRecording(true);
+    }, 320);
+  });
+
+  window.addEventListener('mouseup', () => {
+    clearTimeout(holdTimeout);
+    if (isHoldRecording && isRecordingActive) {
+      stopVoiceRecordingAndSend();
+    }
+  });
+
+  // Bấm giữ trên màn hình cảm ứng điện thoại (Mobile Touch)
+  el.btnVoice.addEventListener('touchstart', (e) => {
+    isHoldTriggered = false;
+    touchStartY = e.touches[0].clientY;
+    holdTimeout = setTimeout(() => {
+      isHoldTriggered = true;
+      startVoiceRecording(true);
+    }, 320);
+  }, { passive: true });
+
+  el.btnVoice.addEventListener('touchmove', (e) => {
+    if (!isHoldRecording) return;
+    const currentY = e.touches[0].clientY;
+    // Trượt ngón tay lên hơn 60px để hủy
+    if (touchStartY - currentY > 60) {
+      cancelVoiceRecording();
+    }
+  }, { passive: true });
+
+  el.btnVoice.addEventListener('touchend', () => {
+    clearTimeout(holdTimeout);
+    if (isHoldRecording && isRecordingActive) {
+      stopVoiceRecordingAndSend();
+    }
+  });
+
+  if (el.btnVoiceCancel) {
+    el.btnVoiceCancel.addEventListener('click', cancelVoiceRecording);
+  }
+  if (el.btnVoiceSend) {
+    el.btnVoiceSend.addEventListener('click', stopVoiceRecordingAndSend);
+  }
+}
+
+
+// ═══════════════════════════════════════════════════
+// TÍNH NĂNG 2: BIỂU TƯỢNG CẢM XÚC IPHONE EMOJI PICKER
+// Phân loại chuẩn iOS: Thường dùng, Mặt cười, Động vật,
+// Đồ ăn, Hoạt động, Đồ vật & Biểu tượng
+// ═══════════════════════════════════════════════════
+
+const IPHONE_EMOJIS = {
+  recent: JSON.parse(localStorage.getItem('chatmatch_recent_emojis') || 'null') || [
+    '❤️', '😂', '👍', '🔥', '🥰', '🥺', '✨', '🎉', '😭', '🤣', '🙏', '💖', '🥳', '👏', '☕', '🎮', '🌸', '💯'
+  ],
+  smileys: [
+    '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩',
+    '😘', '😗', '😚', '😙', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨',
+    '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕',
+    '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '😟',
+    '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖',
+    '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '💀', '☠️', '💩', '🤡', '👻', '👽', '🤖'
+  ],
+  animals: [
+    '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🐔',
+    '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋', '🐌', '🐞',
+    '🐜', '🦟', '🐢', '🐍', '🦎', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋',
+    '🦈', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🦣', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🌸',
+    '🌺', '🌻', '🌹', '🌷', '🌼', '🍀', '🌿', '🍁', '🍂', '🌈', '☀️', '🌙', '☁️', '❄️', '⭐'
+  ],
+  food: [
+    '🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥',
+    '🥝', '🍅', '🥑', '🥦', '🌽', '🌶️', '🍞', '🥐', '🥖', '🥨', '🥯', '🧀', '🍳', '🥞', '🧇', '🥓',
+    '🥩', '🍗', '🍖', '🌭', '🍔', '🍟', '🍕', '🥪', '🌮', '🌯', '🥗', '🥘', '🍜', '🍝', '🍣', '🍱',
+    '🍦', '🍧', '🍨', '🍩', '🍪', '🎂', '🍰', '🧁', '🍫', '🍬', '🍭', '☕', '🍵', '🧋', '🥤', '🍺', '🍻', '🥂', '🍷'
+  ],
+  activity: [
+    '⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🥊', '🥋',
+    '⛸️', '🛹', '🛼', '⛷️', '🏂', '🏋️', '🤺', '🏇', '🧗', '🏆', '🥇', '🥈', '🥉', '🎯', '🎮', '🎲',
+    '🧩', '🎨', '🎭', '🎪', '🎤', '🎧', '🎼', '🎹', '🥁', '🎷', '🎺', '🎸'
+  ],
+  objects: [
+    '💡', '📱', '💻', '⌨️', '📷', '🎥', '📺', '📻', '⏰', '🧭', '💎', '🎁', '🎈', '💌', '💖', '💔',
+    '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💯', '💢', '💥', '💫', '💬', '💭', '🗯️', '🎵',
+    '🎶', '🔔', '📢', '🚀', '✈️', '🚗', '🚲', '🏠', '🔥', '✨', '⚡', '⚠️', '🚫', '⛔', '❌', '⭕', '❓', '❗'
+  ],
+};
+
+let currentEmojiCategory = 'recent';
+
+/** Bỏ dấu tiếng Việt để tìm kiếm linh hoạt cả có dấu lẫn không dấu */
+function stripVietnameseTones(str) {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd');
+}
+
+/** Từ điển ánh xạ từ khóa tìm kiếm cho Emoji iOS */
+const EMOJI_SEARCH_TAGS = [
+  { emojis: ['😂', '🤣', '😆', '😄', '😃', '😀', '😅', '😹', '😸', '😁', '🥳', '😎'], tags: ['cuoi', 'cười', 'laugh', 'haha', 'vui', 'hai', 'hài', 'funny', 'hihi', 'lol', 'kaka'] },
+  { emojis: ['❤️', '💖', '💕', '💓', '💗', '💘', '💝', '💞', '💟', '🥰', '😍', '😘', '😻', '💋'], tags: ['tim', 'heart', 'yeu', 'yêu', 'love', 'iu', 'thuong', 'thương', 'hon', 'hôn', 'kiss'] },
+  { emojis: ['😭', '😢', '🥺', '😿', '😥', '😰', '💔', '😞', '😔', '🙁', '☹️', '😩', '😫'], tags: ['khoc', 'khóc', 'cry', 'sad', 'buon', 'buồn', 'sau', 'sầu', 'dau', 'đau', 'huhu'] },
+  { emojis: ['😡', '😠', '🤬', '😤', '👿', '💢'], tags: ['gian', 'giận', 'tuc', 'tức', 'angry', 'mad', 'dien', 'điên', 'chui', 'bực', 'doi', 'dỗi'] },
+  { emojis: ['😲', '😮', '🤯', '😱', '😳', '🙀', '😯', '😦', '😧'], tags: ['soc', 'sốc', 'shock', 'omg', 'ngac nhien', 'ngạc nhiên', 'wow', 'troi oi', 'trời ơi', 'ulatr'] },
+  { emojis: ['😴', '😪', '🤤', '🥱', '💤', '🌙'], tags: ['ngu', 'ngủ', 'sleep', 'met', 'mệt', 'tired', 'buon ngu', 'buồn ngủ', 'g9', 'kho', 'khò'] },
+  { emojis: ['👍', '👌', '👏', '🤝', '🙌', '✌️', '🤙', '💪', '💯', '✔️', '✅'], tags: ['like', 'thich', 'thích', 'ok', 'oke', 'tuyet', 'tuyệt', 'dinh', 'đỉnh', 'good', 'chot', 'chốt'] },
+  { emojis: ['🐶', '🐕', '🦮', '🐩'], tags: ['cho', 'chó', 'dog', 'cun', 'cún', 'gau'] },
+  { emojis: ['🐱', '🐈', '🐈‍⬛', '😸', '😹', '😻'], tags: ['meo', 'mèo', 'cat', 'meow', 'miu'] },
+  { emojis: ['🍔', '🍟', '🍕', '🌭', '🥪', '🌮', '🥩', '🍗', '🍜', '🍣', '🍱'], tags: ['an', 'ăn', 'food', 'com', 'cơm', 'doi', 'đói', 'mi', 'mì', 'them', 'thèm'] },
+  { emojis: ['☕', '🍵', '🧋', '🥤', '🍺', '🍻', '🥂', '🍷'], tags: ['uong', 'uống', 'drink', 'tra', 'trà', 'cafe', 'cà phê', 'tra sua', 'trà sữa', 'bia', 'ruou', 'rượu'] },
+  { emojis: ['🔥', '✨', '⚡', '🌟', '⭐', '☀️', '🌙', '☁️', '❄️', '🌈'], tags: ['lua', 'lửa', 'fire', 'chay', 'cháy', 'sao', 'star', 'nang', 'nắng', 'mua', 'mưa', 'may', 'mây', 'troi', 'trời'] },
+  { emojis: ['🎮', '🎲', '🎯', '🏆', '🥇', '⚽', '🏀', '🎾'], tags: ['game', 'choi', 'chơi', 'bong', 'bóng', 'the thao', 'thể thao', 'sport'] },
+  { emojis: ['👋', '🙋', '🏃', '✈️', '💨'], tags: ['chao', 'chào', 'hello', 'hi', 'tam biet', 'tạm biệt', 'bye', 'bai'] },
+  { emojis: ['🙏', '💖', '🥰', '💐', '🌹', '✨'], tags: ['cam on', 'cảm ơn', 'thanks', 'thank you', 'biet on'] },
+];
+
+function renderEmojiPicker(category = currentEmojiCategory, filterQuery = '') {
+  if (!el.emojiGridContainer) return;
+  el.emojiGridContainer.innerHTML = '';
+
+  const cleanQuery = filterQuery.trim().toLowerCase();
+  const strippedQuery = stripVietnameseTones(cleanQuery);
+  let list = [];
+
+  if (strippedQuery) {
+    // 1. Tìm kiếm theo tags thông minh (hỗ trợ cả tiếng Việt có dấu, không dấu và tiếng Anh)
+    const matchedEmojis = new Set();
+    EMOJI_SEARCH_TAGS.forEach((group) => {
+      const match = group.tags.some((tag) => {
+        const strippedTag = stripVietnameseTones(tag.toLowerCase());
+        return strippedTag.includes(strippedQuery) || strippedQuery.includes(strippedTag);
+      });
+      if (match) {
+        group.emojis.forEach((em) => matchedEmojis.add(em));
+      }
+    });
+
+    if (matchedEmojis.size > 0) {
+      list = Array.from(matchedEmojis);
+    } else {
+      // 2. Fallback: tìm trực tiếp ký tự emoji
+      const all = [
+        ...IPHONE_EMOJIS.smileys,
+        ...IPHONE_EMOJIS.animals,
+        ...IPHONE_EMOJIS.food,
+        ...IPHONE_EMOJIS.activity,
+        ...IPHONE_EMOJIS.objects,
+      ];
+      list = all.filter((e) => e.includes(cleanQuery));
+      if (list.length === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.className = 'empty-search-msg';
+        emptyMsg.style.cssText = 'padding: 24px 12px; text-align: center; color: var(--text-muted); font-size: 0.84rem; width: 100%;';
+        emptyMsg.textContent = `Không tìm thấy emoji nào cho "${filterQuery}"`;
+        el.emojiGridContainer.appendChild(emptyMsg);
+        return;
+      }
+    }
+  } else {
+    list = IPHONE_EMOJIS[category] || IPHONE_EMOJIS.recent;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'emoji-grid';
+
+  list.forEach((emoji) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'emoji-item-btn';
+    btn.textContent = emoji;
+    btn.setAttribute('aria-label', emoji);
+
+    btn.addEventListener('click', () => {
+      insertEmojiAtCursor(emoji);
+      saveRecentEmoji(emoji);
+      playTone(620, 'sine', 0.03, 0.04);
+    });
+
+    grid.appendChild(btn);
+  });
+
+  el.emojiGridContainer.appendChild(grid);
+}
+
+function insertEmojiAtCursor(emoji) {
+  const textarea = el.inputMessage;
+  if (!textarea) return;
+
+  const start = textarea.selectionStart || textarea.value.length;
+  const end = textarea.selectionEnd || textarea.value.length;
+  const text = textarea.value;
+
+  textarea.value = text.slice(0, start) + emoji + text.slice(end);
+  textarea.selectionStart = textarea.selectionEnd = start + emoji.length;
+  el.charCurrent.textContent = textarea.value.length;
+  textarea.focus();
+
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  handleLocalTyping();
+}
+
+function saveRecentEmoji(emoji) {
+  let recent = IPHONE_EMOJIS.recent.filter((e) => e !== emoji);
+  recent.unshift(emoji);
+  if (recent.length > 24) recent = recent.slice(0, 24);
+  IPHONE_EMOJIS.recent = recent;
+  try {
+    localStorage.setItem('chatmatch_recent_emojis', JSON.stringify(recent));
+  } catch {}
+}
+
+// ═══════════════════════════════════════════════════
+// TÍNH NĂNG 2B: KHO NHÃN DÁN (STICKER PACKS)
+// Trích xuất trực tiếp nhãn dán Douyin và Animated WebP trong suốt
+// ═══════════════════════════════════════════════════
+
+const STICKER_PACKS = {
+  douyin: {
+    id: 'douyin',
+    name: '🟡 Douyin Classic',
+    stickers: [
+      { id: 'dy_weixiao', title: 'Mỉm cười', url: '/assets/stickers/douyin/weixiao.png' },
+      { id: 'dy_xiaoku', title: 'Cười ra nước mắt', url: '/assets/stickers/douyin/xiaoku.png' },
+      { id: 'dy_daxiao', title: 'Cười lớn', url: '/assets/stickers/douyin/daxiao.png' },
+      { id: 'dy_aixinshou', title: 'Bắn tim', url: '/assets/stickers/douyin/aixinshou.png' },
+      { id: 'dy_kiss', title: 'Hôn gió', url: '/assets/stickers/douyin/kiss.png' },
+      { id: 'dy_iloveyou', title: 'I Love You', url: '/assets/stickers/douyin/iloveyou.png' },
+      { id: 'dy_aimu', title: 'Mê mẩn', url: '/assets/stickers/douyin/aimu.png' },
+      { id: 'dy_haixiu', title: 'E thẹn', url: '/assets/stickers/douyin/haixiu.png' },
+      { id: 'dy_666', title: '666 Đỉnh chóp', url: '/assets/stickers/douyin/666.png' },
+      { id: 'dy_zan', title: 'Tán thành (Like)', url: '/assets/stickers/douyin/zan.png' },
+      { id: 'dy_xiaoguzhang', title: 'Vỗ tay tán thưởng', url: '/assets/stickers/douyin/xiaoguzhang.png' },
+      { id: 'dy_zhuangku', title: 'Giả ngầu đeo kính', url: '/assets/stickers/douyin/zhuangku.png' },
+      { id: 'dy_baiyan', title: 'Liếc mắt coi thường', url: '/assets/stickers/douyin/baiyan.png' },
+      { id: 'dy_huaixiao', title: 'Cười nham hiểm', url: '/assets/stickers/douyin/huaixiao.png' },
+      { id: 'dy_goutou', title: 'Doge cười gian', url: '/assets/stickers/douyin/goutouhuaixiao.png' },
+      { id: 'dy_touxiao', title: 'Cười trộm', url: '/assets/stickers/douyin/touxiao.png' },
+      { id: 'dy_daku', title: 'Khóc lớn', url: '/assets/stickers/douyin/daku.png' },
+      { id: 'dy_kuku', title: 'Khóc thảm thiết', url: '/assets/stickers/douyin/kuku.png' },
+      { id: 'dy_kuaikule', title: 'Sắp khóc rồi', url: '/assets/stickers/douyin/kuaikule.png' },
+      { id: 'dy_kelian', title: 'Đáng thương rơm rớm', url: '/assets/stickers/douyin/kelian.png' },
+      { id: 'dy_fennu', title: 'Phẫn nộ', url: '/assets/stickers/douyin/fennu.png' },
+      { id: 'dy_zhuakuang', title: 'Cào cấu phát điên', url: '/assets/stickers/douyin/zhuakuang.png' },
+      { id: 'dy_jingkong', title: 'Kinh hoàng', url: '/assets/stickers/douyin/jingkong.png' },
+      { id: 'dy_What', title: 'What? Cái gì?', url: '/assets/stickers/douyin/What.png' },
+      { id: 'dy_wulian', title: 'Che mặt bất lực', url: '/assets/stickers/douyin/wulian.png' },
+      { id: 'dy_koubi', title: 'Ngoáy mũi', url: '/assets/stickers/douyin/koubi.png' },
+      { id: 'dy_anzhong', title: 'Ẩn nấp quan sát', url: '/assets/stickers/douyin/anzhongguancha.png' },
+      { id: 'dy_baibai', title: 'Bái bai vẫy tay', url: '/assets/stickers/douyin/baibai.png' },
+    ],
+  },
+  cats: {
+    id: 'cats',
+    name: '🐱 Mèo Viral',
+    stickers: [
+      { id: 'cat_jamming', title: 'Mèo quẩy EDM', url: 'https://media.giphy.com/media/jpbnoe3UIa8TU8LM13/giphy.gif' },
+      { id: 'cat_pop', title: 'Popcat mở mồm pop pop', url: 'https://media.giphy.com/media/vQqeT3AYg8S5O/giphy.gif' },
+      { id: 'cat_banana', title: 'Banana Cat khóc huhu', url: 'https://media.giphy.com/media/ISOckXUybVfQ4/giphy.gif' },
+      { id: 'cat_cry', title: 'Mèo mắt ngấn lệ', url: 'https://media.giphy.com/media/L95W4wv8nnb9K/giphy.gif' },
+      { id: 'cat_bongo', title: 'Bongo Cat gõ phím', url: 'https://media.giphy.com/media/3ELtfmA4Apkju/giphy.gif' },
+      { id: 'cat_heart', title: 'Mèo ôm tim cưng xỉu', url: 'https://media.giphy.com/media/uw0KpagtwEJtC/giphy.gif' },
+      { id: 'cat_kiss', title: 'Mèo thơm má moa moa', url: 'https://media.giphy.com/media/l4pTdcifPZLpDjL1e/giphy.gif' },
+      { id: 'cat_thumbs', title: 'Mèo giơ ngón like', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+      { id: 'cat_sleep', title: 'Mèo đắp chăn ngủ say', url: 'https://media.giphy.com/media/mguPrVJAnEHIY/giphy.gif' },
+      { id: 'cat_eat', title: 'Mèo ăn nhồm nhoàm', url: 'https://media.giphy.com/media/3oEdva9BUHPIs2SkGk/giphy.gif' },
+      { id: 'cat_drool', title: 'Mèo thèm chảy dãi', url: 'https://media.giphy.com/media/12uXi1GXBibALC/giphy.gif' },
+      { id: 'cat_bye', title: 'Mèo vẫy tay chào', url: 'https://media.giphy.com/media/Nx0rz3jtxt99A4IpYn/giphy.gif' },
+    ],
+  },
+  pandas: {
+    id: 'pandas',
+    name: '🐼 Gấu Trúc Douyin Bựa',
+    stickers: [
+      { id: 'panda_clap', title: 'Gấu trúc vỗ tay', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+      { id: 'panda_toast', title: 'Leonardo nâng ly chúc mừng', url: 'https://media.giphy.com/media/GCLlQnV7Ej7Pj8z57M/giphy.gif' },
+      { id: 'gigachad', title: 'Gigachad cười tự tin', url: 'https://media.giphy.com/media/CAYVZA5NRb529kKQUc/giphy.gif' },
+      { id: 'panda_shy', title: 'Hải cẩu ngại ngùng', url: 'https://media.giphy.com/media/eHpWHuEUxHIre/giphy.gif' },
+      { id: 'cat_pout', title: 'Dỗi quay lưng', url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
+      { id: 'angry_cat', title: 'Giận tím người', url: 'https://media.giphy.com/media/MDJ9IbxxvDUQM/giphy.gif' },
+    ],
+  },
+  pepe: {
+    id: 'pepe',
+    name: '🐸 Pepe & Động Vật Viral',
+    stickers: [
+      { id: 'pepe_cry', title: 'Pepe khóc ướt gối', url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
+      { id: 'doge_laugh', title: 'Doge cười sảng khoái', url: 'https://media.giphy.com/media/oBQZIgNobc7EWBSYJS/giphy.gif' },
+      { id: 'doge_side', title: 'Doge ánh nhìn phán xét', url: 'https://media.giphy.com/media/H5C8CevNMbpBqNqFjl/giphy.gif' },
+      { id: 'doge_sleep', title: 'Doge khò khò ngon giấc', url: 'https://media.giphy.com/media/14udF3WUwwGMaA/giphy.gif' },
+      { id: 'mind_blown', title: 'Nổ não ảo ma', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+      { id: 'coffin', title: 'Vũ điệu khiêng quan tài', url: 'https://media.giphy.com/media/Wr2747CnxwBSqyK6xt/giphy.gif' },
+    ],
+  },
+};
+
+const TIKTOK_STICKER_PACKS = STICKER_PACKS;
+
+let currentPickerMode = 'emoji'; // 'emoji' | 'stickers'
+let currentStickerPack = 'douyin';
+
+function setPickerMode(mode) {
+  currentPickerMode = mode;
+  if (mode === 'stickers') {
+    el.tabPickerEmoji?.classList.remove('active');
+    el.tabPickerStickers?.classList.add('active');
+    el.pickerEmojiView?.classList.add('hidden');
+    el.pickerStickerView?.classList.remove('hidden');
+    renderStickerPicker(currentStickerPack);
+  } else {
+    el.tabPickerStickers?.classList.remove('active');
+    el.tabPickerEmoji?.classList.add('active');
+    el.pickerStickerView?.classList.add('hidden');
+    el.pickerEmojiView?.classList.remove('hidden');
+    renderEmojiPicker(currentEmojiCategory);
+    if (el.inputEmojiSearch) el.inputEmojiSearch.focus();
+  }
+}
+
+function renderStickerPicker(packKey = currentStickerPack) {
+  if (!el.stickerGridContainer) return;
+  const pack = STICKER_PACKS[packKey] || STICKER_PACKS.douyin;
+  currentStickerPack = packKey;
+
+  if (el.stickerCurrentPackTitle) {
+    el.stickerCurrentPackTitle.textContent = pack.name;
+  }
+
+  el.stickerGridContainer.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'sticker-grid';
+
+  pack.stickers.forEach((sticker) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sticker-item-btn';
+    btn.title = `Nhấn để gửi nhãn dán "${sticker.title}"`;
+    btn.setAttribute('aria-label', sticker.title);
+
+    const img = document.createElement('img');
+    img.src = sticker.url;
+    img.alt = sticker.title;
+    img.loading = 'lazy';
+
+    btn.appendChild(img);
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendSticker(sticker.url, sticker.title, sticker.id);
+    });
+
+    grid.appendChild(btn);
+  });
+
+  el.stickerGridContainer.appendChild(grid);
+}
+
+function sendSticker(url, title, stickerId) {
+  if (currentScreen !== 'chat') return;
+
+  // Gửi qua WebSocket với cờ isSticker = true
+  send('meme', {
+    url,
+    title,
+    memeId: stickerId,
+    isSticker: true,
+  });
+
+  // Render trực tiếp phía người gửi dạng Sticker Bubble trong suốt
+  appendStickerMessage(url, title, 'sent', new Date().toISOString());
+
+  // Âm thanh gửi
+  playTone(560, 'sine', 0.05, 0.06);
+
+  // Ẩn bảng chọn
+  if (el.emojiPickerPopover) {
+    el.emojiPickerPopover.classList.add('hidden');
+  }
+
+  el.inputMessage?.focus();
+}
+
+// Bật/tắt Tab Biểu tượng vs Nhãn dán
+if (el.tabPickerEmoji) {
+  el.tabPickerEmoji.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setPickerMode('emoji');
+  });
+}
+if (el.tabPickerStickers) {
+  el.tabPickerStickers.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setPickerMode('stickers');
+  });
+}
+
+// Nút mở khay Emoji
+if (el.btnEmojiToggle && el.emojiPickerPopover) {
+  el.btnEmojiToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isHidden = el.emojiPickerPopover.classList.contains('hidden');
+    if (isHidden) {
+      el.emojiPickerPopover.classList.remove('hidden');
+      setPickerMode('emoji');
+    } else {
+      if (currentPickerMode === 'emoji') {
+        el.emojiPickerPopover.classList.add('hidden');
+      } else {
+        setPickerMode('emoji');
+      }
+    }
+  });
+}
+
+// Nút mở khay Nhãn dán
+if (el.btnStickerToggle && el.emojiPickerPopover) {
+  el.btnStickerToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isHidden = el.emojiPickerPopover.classList.contains('hidden');
+    if (isHidden) {
+      el.emojiPickerPopover.classList.remove('hidden');
+      setPickerMode('stickers');
+    } else {
+      if (currentPickerMode === 'stickers') {
+        el.emojiPickerPopover.classList.add('hidden');
+      } else {
+        setPickerMode('stickers');
+      }
+    }
+  });
+}
+
+if (el.btnCloseEmojiPicker) {
+  el.btnCloseEmojiPicker.addEventListener('click', () => {
+    el.emojiPickerPopover.classList.add('hidden');
+  });
+}
+
+if (el.emojiCategoryTabs) {
+  el.emojiCategoryTabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('.emoji-tab-btn');
+    if (!tab) return;
+    const cat = tab.dataset.cat;
+    if (!cat) return;
+
+    currentEmojiCategory = cat;
+    el.emojiCategoryTabs.querySelectorAll('.emoji-tab-btn').forEach((b) => b.classList.remove('active'));
+    tab.classList.add('active');
+
+    if (el.inputEmojiSearch) el.inputEmojiSearch.value = '';
+    renderEmojiPicker(currentEmojiCategory);
+  });
+}
+
+if (el.stickerPackTabs) {
+  el.stickerPackTabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('.sticker-pack-tab-btn');
+    if (!tab) return;
+    const pack = tab.dataset.pack;
+    if (!pack) return;
+
+    el.stickerPackTabs.querySelectorAll('.sticker-pack-tab-btn').forEach((b) => b.classList.remove('active'));
+    tab.classList.add('active');
+    renderStickerPicker(pack);
+  });
+}
+
+if (el.inputEmojiSearch) {
+  el.inputEmojiSearch.addEventListener('input', () => {
+    renderEmojiPicker(currentEmojiCategory, el.inputEmojiSearch.value);
+  });
+}
+
+// Bấm click ra ngoài khay emoji / sticker để đóng
+document.addEventListener('click', (e) => {
+  if (el.emojiPickerPopover && !el.emojiPickerPopover.classList.contains('hidden')) {
+    const isClickInside = el.emojiPickerPopover.contains(e.target);
+    const isClickEmojiBtn = el.btnEmojiToggle && el.btnEmojiToggle.contains(e.target);
+    const isClickStickerBtn = el.btnStickerToggle && el.btnStickerToggle.contains(e.target);
+    if (!isClickInside && !isClickEmojiBtn && !isClickStickerBtn) {
+      el.emojiPickerPopover.classList.add('hidden');
+    }
+  }
+});
+
+
+// ═══════════════════════════════════════════════════
+// TÍNH NĂNG 3: GỢI Ý NHÃN DÁN THEO TỪ KHÓA
+// (Phong cách Zalo, Telegram & Messenger)
+// ═══════════════════════════════════════════════════
+
+const STICKER_DICTIONARY = [
+  {
+    name: 'haha',
+    keywords: ['haha', 'hahaha', 'cuoi', 'cười', 'buon cuoi', 'buồn cười', 'lol', 'lmao', 'kaka', 'kkk', 'kkkk', 'hai', 'hài', 'vui', 'khoai', 'khoái'],
+    repeatPattern: /^(ha|ka|he)+$/i,
+    emojis: ['😂', '🤣', '😆', '😹', '😸', '🤪', '😁', '😀'],
+    stickers: [
+      { id: 'dy_xiaoku', title: 'Cười ra nước mắt', url: '/assets/stickers/douyin/xiaoku.png' },
+      { id: 'dy_daxiao', title: 'Cười lớn', url: '/assets/stickers/douyin/daxiao.png' },
+      { id: 'cat_jamming', title: 'Mèo quẩy EDM', url: 'https://media.giphy.com/media/jpbnoe3UIa8TU8LM13/giphy.gif' },
+      { id: 'cat_laugh', title: 'Mèo cười rung rốn', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
+    ],
+  },
+  {
+    name: 'shock',
+    keywords: ['u la troi', 'u là trời', 'ulatr', 'troi oi', 'trời ơi', 'vai', 'vãi', 'omg', 'soc', 'sốc', 'bat ngo', 'bất ngờ', 'ao', 'ảo', 'ao ma', 'ảo ma', 'ảo thật đấy', 'cai gi', 'cái gì', 'wow'],
+    repeatPattern: null,
+    emojis: ['😱', '🤯', '😲', '😮', '😳', '🙀', '😯'],
+    stickers: [
+      { id: 'dy_What', title: 'What? Cái gì?', url: '/assets/stickers/douyin/What.png' },
+      { id: 'dy_jingkong', title: 'Kinh hoàng', url: '/assets/stickers/douyin/jingkong.png' },
+      { id: 'cat_pop', title: 'Popcat mở mồm', url: 'https://media.giphy.com/media/vQqeT3AYg8S5O/giphy.gif' },
+      { id: 'mind_blown', title: 'Nổ não ảo ma', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+    ],
+  },
+  {
+    name: 'sad',
+    keywords: ['khoc', 'khóc', 'hu hu', 'huhu', 'huhuhu', 'sad', 'sau', 'sầu', 'buon', 'buồn', 'tram cam', 'trầm cảm', 'toan', 'toang'],
+    repeatPattern: /^hu+$/i,
+    emojis: ['😭', '😢', '🥺', '😿', '💔', '😞', '😥', '😩'],
+    stickers: [
+      { id: 'dy_daku', title: 'Khóc lớn', url: '/assets/stickers/douyin/daku.png' },
+      { id: 'dy_kuku', title: 'Khóc thảm thiết', url: '/assets/stickers/douyin/kuku.png' },
+      { id: 'cat_banana', title: 'Banana Cat khóc', url: 'https://media.giphy.com/media/ISOckXUybVfQ4/giphy.gif' },
+      { id: 'pepe_cry', title: 'Pepe khóc ướt gối', url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
+    ],
+  },
+  {
+    name: 'love',
+    keywords: ['yeu', 'yêu', 'iu', 'thuong', 'thương', 'tym', 'tim', 'tha tim', 'thả tim', 'ban tim', 'bắn tim', 'moa', 'hon', 'hôn', 'love'],
+    repeatPattern: null,
+    emojis: ['❤️', '💖', '🥰', '😍', '😘', '💕', '💋', '😻'],
+    stickers: [
+      { id: 'dy_aixinshou', title: 'Bắn tim Douyin', url: '/assets/stickers/douyin/aixinshou.png' },
+      { id: 'dy_kiss', title: 'Hôn gió', url: '/assets/stickers/douyin/kiss.png' },
+      { id: 'dy_iloveyou', title: 'I Love You', url: '/assets/stickers/douyin/iloveyou.png' },
+      { id: 'cat_heart', title: 'Mèo ôm tim cute', url: 'https://media.giphy.com/media/uw0KpagtwEJtC/giphy.gif' },
+    ],
+  },
+  {
+    name: 'ok',
+    keywords: ['ok', 'oke', 'duoc', 'được', 'chot', 'chốt', 'nhat tri', 'nhất trí', 'duyet', 'duyệt', 'dinh', 'đỉnh', 'like', 'hay', 'tuyet', 'tuyệt', 'dinh cao', 'đỉnh cao'],
+    repeatPattern: null,
+    emojis: ['👍', '👌', '👏', '💯', '🔥', '🤝', '😎', '✅'],
+    stickers: [
+      { id: 'dy_666', title: '666 Đỉnh chóp', url: '/assets/stickers/douyin/666.png' },
+      { id: 'dy_zan', title: 'Tán thành Like', url: '/assets/stickers/douyin/zan.png' },
+      { id: 'dy_xiaoguzhang', title: 'Vỗ tay tán thưởng', url: '/assets/stickers/douyin/xiaoguzhang.png' },
+      { id: 'panda_clap', title: 'Gấu trúc vỗ tay', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
+    ],
+  },
+  {
+    name: 'angry',
+    keywords: ['doi', 'dỗi', 'hon', 'hờn', 'gian', 'giận', 'bat den', 'bắt đền', 'doi roi', 'dỗi rồi', 'nghi choi', 'nghỉ chơi', 'tuc', 'tức'],
+    repeatPattern: null,
+    emojis: ['😤', '😡', '😠', '🙄', '😒', '🤐', '👿'],
+    stickers: [
+      { id: 'dy_fennu', title: 'Phẫn nộ', url: '/assets/stickers/douyin/fennu.png' },
+      { id: 'dy_zhuakuang', title: 'Cào cấu phát điên', url: '/assets/stickers/douyin/zhuakuang.png' },
+      { id: 'cat_pout', title: 'Mèo dỗi quay lưng', url: 'https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif' },
+      { id: 'angry_cat', title: 'Giận tím người', url: 'https://media.giphy.com/media/MDJ9IbxxvDUQM/giphy.gif' },
+    ],
+  },
+  {
+    name: 'sleep',
+    keywords: ['ngu', 'ngủ', 'ngu day', 'ngủ đây', 'g9', 'kho', 'khò', 'buon ngu', 'buồn ngủ', 'met', 'mệt', 'ngu thoi', 'ngủ thôi', 'good night'],
+    repeatPattern: null,
+    emojis: ['😴', '😪', '🥱', '🤤', '💤', '🌙', '🛌'],
+    stickers: [
+      { id: 'cat_sleep', title: 'Mèo đắp chăn ngủ say', url: 'https://media.giphy.com/media/mguPrVJAnEHIY/giphy.gif' },
+      { id: 'doge_sleep', title: 'Doge khò khò ngon lành', url: 'https://media.giphy.com/media/14udF3WUwwGMaA/giphy.gif' },
+    ],
+  },
+  {
+    name: 'eat',
+    keywords: ['doi', 'đói', 'an gi', 'ăn gì', 'them', 'thèm', 'mlem', 'an com', 'ăn cơm', 'doi bung', 'đói bụng', 'an uong', 'ăn uống'],
+    repeatPattern: null,
+    emojis: ['🤤', '🍔', '🍟', '🍕', '🍜', '😋', '🍣', '🥩'],
+    stickers: [
+      { id: 'cat_eat', title: 'Mèo ăn nhồm nhoàm', url: 'https://media.giphy.com/media/3oEdva9BUHPIs2SkGk/giphy.gif' },
+      { id: 'cat_drool', title: 'Chảy nước miếng', url: 'https://media.giphy.com/media/12uXi1GXBibALC/giphy.gif' },
+    ],
+  },
+  {
+    name: 'bye',
+    keywords: ['tam biet', 'tạm biệt', 'bye', 'bai', 'goodbye', 'bai bai', 'bye bye', 'cut', 'cút', 'vinh biet', 'vĩnh biệt', 'rip'],
+    repeatPattern: null,
+    emojis: ['👋', '🙋', '🏃', '✈️', '💨', '🚶', '🫡'],
+    stickers: [
+      { id: 'dy_baibai', title: 'Bái bai vẫy tay', url: '/assets/stickers/douyin/baibai.png' },
+      { id: 'cat_bye', title: 'Mèo vẫy tay chào', url: 'https://media.giphy.com/media/Nx0rz3jtxt99A4IpYn/giphy.gif' },
+      { id: 'coffin', title: 'Tiễn biệt cụ', url: 'https://media.giphy.com/media/Wr2747CnxwBSqyK6xt/giphy.gif' },
+    ],
+  },
+  {
+    name: 'shy',
+    keywords: ['ngai', 'ngại', 'xau ho', 'xấu hổ', 'nguong', 'ngượng', 'do mat', 'đỏ mặt', 'hihi', 'hihihi'],
+    repeatPattern: /^hi+$/i,
+    emojis: ['😳', '🙈', '👉👈', '🥺', '☺️', '🌸', '🫣'],
+    stickers: [
+      { id: 'dy_haixiu', title: 'E thẹn đỏ mặt', url: '/assets/stickers/douyin/haixiu.png' },
+      { id: 'dy_wulian', title: 'Lấy tay che mặt', url: '/assets/stickers/douyin/wulian.png' },
+      { id: 'panda_shy', title: 'Hải cẩu đỏ mặt', url: 'https://media.giphy.com/media/eHpWHuEUxHIre/giphy.gif' },
+    ],
+  },
+  {
+    name: 'judge',
+    keywords: ['che', 'chê', 'che nha', 'chê nha', 'lac dau', 'lắc đầu', 'bo di', 'bỏ đi', 'thoi xong', 'thôi xong', 'lieu lieu', 'liêu liêu'],
+    repeatPattern: null,
+    emojis: ['😒', '🙄', '👀', '👎', '🤦', '🤷', '🤨'],
+    stickers: [
+      { id: 'dy_baiyan', title: 'Liếc mắt coi thường', url: '/assets/stickers/douyin/baiyan.png' },
+      { id: 'dy_koubi', title: 'Ngoáy mũi', url: '/assets/stickers/douyin/koubi.png' },
+      { id: 'doge_side', title: 'Ánh nhìn phán xét', url: 'https://media.giphy.com/media/H5C8CevNMbpBqNqFjl/giphy.gif' },
+    ],
+  },
+  {
+    name: 'hello',
+    keywords: ['chao', 'chào', 'hello', 'hi', 'xin chao', 'xin chào', 'helo', 'halo'],
+    repeatPattern: null,
+    emojis: ['👋', '✨', '😃', '🤝', '🥰', '🌸'],
+    stickers: [
+      { id: 'dy_weixiao', title: 'Mỉm cười chào', url: '/assets/stickers/douyin/weixiao.png' },
+      { id: 'dy_baibai', title: 'Vẫy tay chào', url: '/assets/stickers/douyin/baibai.png' },
+      { id: 'cat_bye', title: 'Mèo vẫy tay chào', url: 'https://media.giphy.com/media/Nx0rz3jtxt99A4IpYn/giphy.gif' },
+    ],
+  },
+  {
+    name: 'thanks',
+    keywords: ['cam on', 'cảm ơn', 'thanks', 'thank you', 'cmon', 'iu qua', 'iu quá'],
+    repeatPattern: null,
+    emojis: ['🙏', '💖', '🥰', '💐', '🌹', '✨'],
+    stickers: [
+      { id: 'dy_aimu', title: 'Ái mộ biết ơn', url: '/assets/stickers/douyin/aimu.png' },
+      { id: 'dy_xiaoguzhang', title: 'Vỗ tay tán thưởng', url: '/assets/stickers/douyin/xiaoguzhang.png' },
+      { id: 'cat_heart', title: 'Cảm ơn đáng yêu', url: 'https://media.giphy.com/media/uw0KpagtwEJtC/giphy.gif' },
+    ],
+  },
+];
+
+const TIKTOK_MEME_DICTIONARY = STICKER_DICTIONARY;
+
+let lastMatchedMemeWord = '';
+
+function checkMemeSuggestions(text) {
+  if (!el.memeSuggestionsBar || !el.memeSuggestionsList) return;
+  if (!text || typeof text !== 'string') {
+    hideMemeSuggestions();
+    return;
+  }
+
+  const raw = text.trim();
+  if (!raw) {
+    hideMemeSuggestions();
+    return;
+  }
+
+  const rawLower = raw.toLowerCase();
+  const stripped = stripVietnameseTones(rawLower);
+
+  // Lấy từ cuối cùng đang gõ (hoặc từ duy nhất)
+  const words = raw.split(/\s+/);
+  const lastWord = words[words.length - 1] || '';
+  const lastWordLower = lastWord.toLowerCase();
+  const strippedLastWord = stripVietnameseTones(lastWordLower);
+
+  let matchedGroup = null;
+  let matchedKeyword = '';
+
+  // 1. Ưu tiên kiểm tra từ cuối cùng theo pattern lặp âm (ví dụ: hahaha, kakaka, huhuhu, hihihi, kkkk)
+  if (lastWord.length >= 2) {
+    if (/^k{2,}$/i.test(lastWordLower)) {
+      matchedGroup = STICKER_DICTIONARY.find((g) => g.name === 'haha');
+      matchedKeyword = lastWord;
+    } else {
+      for (const group of STICKER_DICTIONARY) {
+        if (group.repeatPattern && group.repeatPattern.test(strippedLastWord)) {
+          matchedGroup = group;
+          matchedKeyword = lastWord;
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. Kiểm tra từ cuối cùng có trùng trực tiếp với từ khóa không
+  if (!matchedGroup && lastWord.length >= 2) {
+    for (const group of STICKER_DICTIONARY) {
+      for (const kw of group.keywords) {
+        const kwLower = kw.toLowerCase();
+        const kwStripped = stripVietnameseTones(kwLower);
+        if (kwLower === lastWordLower || kwStripped === strippedLastWord) {
+          matchedGroup = group;
+          matchedKeyword = kw;
+          break;
+        }
+      }
+      if (matchedGroup) break;
+    }
+  }
+
+  // 3. Nếu chưa khớp, quét cụm từ khóa (cả có dấu và không dấu) trong toàn câu
+  if (!matchedGroup) {
+    for (const group of STICKER_DICTIONARY) {
+      for (const kw of group.keywords) {
+        const kwLower = kw.toLowerCase();
+        const kwStripped = stripVietnameseTones(kwLower);
+
+        const escapedKw = kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex1 = new RegExp(`(^|\\s)${escapedKw}($|\\s|[!?,.])`, 'i');
+
+        const escapedStripped = kwStripped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex2 = new RegExp(`(^|\\s)${escapedStripped}($|\\s|[!?,.])`, 'i');
+
+        if (regex1.test(rawLower) || regex2.test(stripped)) {
+          matchedGroup = group;
+          matchedKeyword = kw;
+          break;
+        }
+      }
+      if (matchedGroup) break;
+    }
+  }
+
+  if (!matchedGroup) {
+    hideMemeSuggestions();
+    return;
+  }
+
+  const stickerList = matchedGroup.stickers || [];
+  if (stickerList.length === 0) {
+    hideMemeSuggestions();
+    return;
+  }
+
+  lastMatchedMemeWord = matchedKeyword;
+  if (el.memeKeywordHighlight) {
+    el.memeKeywordHighlight.textContent = `"${matchedKeyword}"`;
+  }
+
+  // Render danh sách NHÃN DÁN tương ứng theo từ khóa
+  el.memeSuggestionsList.innerHTML = '';
+  stickerList.forEach((st) => {
+    const card = document.createElement('div');
+    card.className = 'meme-suggestion-card';
+    card.title = `Nhấn để gửi nhãn dán "${st.title}"`;
+
+    const img = document.createElement('img');
+    img.src = st.url;
+    img.alt = st.title;
+    img.loading = 'lazy';
+
+    const pill = document.createElement('span');
+    pill.className = 'meme-card-title';
+    pill.textContent = st.title;
+
+    card.appendChild(img);
+    card.appendChild(pill);
+
+    card.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendSticker(st.url, st.title, st.id);
+
+      // Xóa từ khóa kích hoạt khỏi ô nhập nếu cần
+      if (el.inputMessage && lastMatchedMemeWord) {
+        const current = el.inputMessage.value;
+        const escaped = lastMatchedMemeWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(^|\\s)${escaped}($|\\s|[!?,.])`, 'i');
+        el.inputMessage.value = current.replace(regex, ' ').trim();
+        el.charCurrent.textContent = el.inputMessage.value.length;
+        el.inputMessage.style.height = 'auto';
+      }
+
+      hideMemeSuggestions();
+    });
+
+    el.memeSuggestionsList.appendChild(card);
+  });
+
+  el.memeSuggestionsBar.classList.remove('hidden');
+}
+
+function hideMemeSuggestions() {
+  if (el.memeSuggestionsBar) {
+    el.memeSuggestionsBar.classList.add('hidden');
+  }
+}
+
+function sendMeme(url, title, memeId) {
+  if (currentScreen !== 'chat') return;
+
+  // Gửi qua WebSocket
+  send('meme', { url, title, memeId, isSticker: false });
+
+  // Render phía người gửi
+  appendMemeMessage(url, title, 'sent', new Date().toISOString());
+
+  // Âm thanh gửi
+  playTone(500, 'sine', 0.05, 0.06);
+
+  // Xóa từ khóa kích hoạt khỏi ô nhập hoặc làm sạch ô nhập nếu chỉ chứa từ đó
+  if (el.inputMessage && lastMatchedMemeWord) {
+    const current = el.inputMessage.value;
+    const escaped = lastMatchedMemeWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(^|\\s)${escaped}($|\\s|[!?,.])`, 'i');
+    el.inputMessage.value = current.replace(regex, ' ').trim();
+    el.charCurrent.textContent = el.inputMessage.value.length;
+    el.inputMessage.style.height = 'auto';
+  }
+
+  hideMemeSuggestions();
+  el.inputMessage?.focus();
+}
+
+if (el.btnCloseMemeSuggestions) {
+  el.btnCloseMemeSuggestions.addEventListener('click', hideMemeSuggestions);
 }
 
 // ═══════════════════════════════════════════════════
