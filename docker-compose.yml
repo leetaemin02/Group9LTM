@@ -17,6 +17,7 @@ x-chat-common: &chat-common
     PORT: "3001"
     USE_REDIS: "true"
     REDIS_URL: "redis://redis:6379"
+    GROQ_API_KEY: "${GROQ_API_KEY:-}"
     # Không đặt NODE_ENV=production khi demo: chế độ đó bật DISALLOW_SAME_DEVICE,
     # khiến 2 tab cùng trình duyệt không thể ghép cặp với nhau.
   depends_on:
