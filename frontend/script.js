@@ -191,6 +191,8 @@ const WAITING_TIPS = [
 
 let ws = null;
 let clientId = null;
+const RESUME_TOKEN_KEY = 'chatmatch_resume_token';
+let resumePending = false;
 let nickname = '';
 let userAvatar = '🦊';
 let interests = [];
@@ -586,19 +588,9 @@ function connect() {
     }
     updateConnectionStatus('connected');
 
-    // Nếu đã có nickname (reconnect) → re-join
-    if (nickname) {
-      send('join', { nickname, interests, mood: selectedMood, avatar: userAvatar, deviceId: getOrCreateDeviceId() });
-
-      if (currentScreen === 'waiting') {
-        console.log('[WS] Reconnected while waiting -> re-enqueueing find_match');
-        send('find_match');
-        showToast('Đã khôi phục hàng đợi tìm kiếm', 'info');
-      } else if (currentScreen === 'chat') {
-        showToast('Kết nối đã được khôi phục. Phiên trò chuyện trước đã kết thúc.', 'info');
-        switchScreen('login');
-      }
-    }
+    // Chờ message 'connected' từ server.
+    // Không gửi join hoặc find_match tại đây,
+    // vì có thể phiên chat cũ đang cần được khôi phục.
   };
 
   ws.onmessage = (event) => {
@@ -691,17 +683,148 @@ function handleMessage(raw) {
   }
 
   const { type, payload } = msg;
-  const loggedPayload = type === 'attachment_upload'
-    ? { ...payload, ticket: '[redacted]' }
-    : ['attachment', 'attachment_sent'].includes(type)
-      ? { ...payload, attachment: { ...payload.attachment, url: '[redacted]' } }
-      : payload;
+  const loggedPayload = type === 'resume_token'
+    ? { token: '[redacted]' }
+    : type === 'attachment_upload'
+      ? { ...payload, ticket: '[redacted]' }
+      : ['attachment', 'attachment_sent'].includes(type)
+        ? {
+            ...payload,
+            attachment: {
+              ...payload.attachment,
+              url: '[redacted]'
+            }
+          }
+        : payload;
   console.log(`[WS] ← ${type}`, loggedPayload);
 
   switch (type) {
-    case 'connected':
+    case 'connected': {
       clientId = payload.clientId;
       el.onlineNumber.textContent = payload.onlineCount;
+
+      const token = sessionStorage.getItem(RESUME_TOKEN_KEY);
+
+      // Nếu đang ở phòng người thật và còn token, thử resume
+      if (
+        currentScreen === 'chat' &&
+        !isCurrentPartnerBot &&
+        token &&
+        /^[0-9a-f]{64}$/.test(token)
+      ) {
+        resumePending = true;
+
+        console.log('[Resume] Đang yêu cầu khôi phục phòng...');
+        send('resume_session', { token });
+        break;
+      }
+
+      // Không có phiên để khôi phục:
+      // đăng ký lại thông tin người dùng như logic cũ
+      resumePending = false;
+
+      if (nickname) {
+        send('join', {
+          nickname,
+          interests,
+          mood: selectedMood,
+          avatar: userAvatar,
+          deviceId: getOrCreateDeviceId()
+        });
+
+        if (currentScreen === 'waiting') {
+          send('find_match');
+          showToast('Đã khôi phục hàng đợi tìm kiếm', 'info');
+        } else if (currentScreen === 'chat') {
+          // Phòng Lumi hoặc không còn token khôi phục
+          sessionStorage.removeItem(RESUME_TOKEN_KEY);
+          showToast('Phiên trò chuyện trước đã kết thúc.', 'info');
+          switchScreen('login');
+        }
+      }
+
+      break;
+    }
+
+    
+    case 'resume_success': {
+      resumePending = false;
+
+      // Khôi phục clientId gốc để Caro nhận diện đúng X/O
+      clientId = payload.clientId;
+
+      console.log('[Resume] Khôi phục phòng thành công');
+
+      // Giữ nguyên các tin nhắn đang hiển thị
+      // Không gọi handleMatchFound() vì hàm đó xóa lịch sử chat
+      if (currentScreen !== 'chat') {
+        switchScreen('chat');
+      }
+
+      // Khôi phục trạng thái bàn cờ từ server
+      if (payload.game) {
+        handleGameState({
+          action: 'update',
+          game: payload.game
+        });
+      }
+
+      // Cho phép tiếp tục nhập tin nhắn
+      el.inputMessage.disabled = false;
+      el.btnSend.disabled = false;
+      updateAttachmentButton();
+
+      if (el.reconnectOverlay) {
+        el.reconnectOverlay.classList.add('hidden');
+      }
+
+      if (payload.partnerDisconnected) {
+        addSystemMessage(
+          'Bạn đã quay lại phòng. Đang chờ đối phương kết nối lại.'
+        );
+      } else {
+        addSystemMessage('Đã khôi phục kết nối với phòng chat cũ.');
+      }
+
+      showToast('Đã quay lại phòng chat thành công!', 'success');
+      break;
+    }
+
+    case 'resume_failed': {
+      resumePending = false;
+
+      // Không giữ token đã thất bại
+      sessionStorage.removeItem(RESUME_TOKEN_KEY);
+
+      console.warn('[Resume] Khôi phục thất bại:', payload.message);
+
+      showToast(
+        payload.message || 'Không thể khôi phục phòng chat.',
+        'warning',
+        5000
+      );
+
+      if (el.reconnectOverlay) {
+        el.reconnectOverlay.classList.add('hidden');
+      }
+
+      if (el.gamePanel) {
+        el.gamePanel.classList.add('hidden');
+      }
+
+      switchScreen('login');
+      break;
+    }
+
+
+    case 'resume_token':
+      if (typeof payload?.token === 'string' &&
+          /^[0-9a-f]{64}$/.test(payload.token)) {
+
+        sessionStorage.setItem('chatmatch_resume_token', payload.token);
+
+        console.log('[Resume] Đã lưu Resume Token');
+      }
       break;
 
     case 'waiting':
@@ -1002,6 +1125,14 @@ function handleGameInvite(payload) {
 /** Cập nhật bàn cờ Caro (Hỗ trợ 10x10, 15x15 và 20x20) */
 function handleGameState(payload) {
   if (!payload) return;
+
+    if (payload.action === 'invite_sent') {
+    showToast(
+      `Đã gửi lời mời cờ Caro (${payload.size}x${payload.size}) tới đối phương!`,
+      'info'
+    );
+    return;
+  }
 
   // 1. Nhận lời mời chơi game
   if (payload.action === 'invite') {
@@ -2020,13 +2151,14 @@ if (el.modalPartnerInfo) {
 }
 
 // ── Minigame Caro (Hỗ trợ 10x10, 15x15 và 20x20) ────────
+
 if (el.btnMinigame) {
   el.btnMinigame.addEventListener('click', () => {
     send('game_invite', { size: selectedGameSize });
-    showToast(`Đã gửi lời mời cờ Caro (${selectedGameSize}x${selectedGameSize}) tới đối phương!`, 'info');
     playGameClickSound();
   });
 }
+
 
 if (el.gameSizeControls) {
   el.gameSizeControls.addEventListener('click', (e) => {
