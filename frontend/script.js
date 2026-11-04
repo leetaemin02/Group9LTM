@@ -794,7 +794,10 @@ function handleMessage(raw) {
       break;
 
     case 'error':
-      if (payload.code && payload.code.startsWith('ATTACHMENT_')) {
+      if (payload.code === 'MATCHMAKING_UNAVAILABLE') {
+        if (currentScreen === 'waiting') switchScreen('login');
+        showToast(payload.message, 'error');
+      } else if (payload.code && payload.code.startsWith('ATTACHMENT_')) {
         attachmentUploadActive = false;
         pendingAttachmentFile = null;
         setAttachmentStatus('');

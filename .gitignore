@@ -24,3 +24,13 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Local AI assistant and agent configuration
+.agents/
+.claude/
+.cursor/
+AGENTS.md
+.github/agents/
+.github/instructions/
+.github/prompts/
+.github/copilot-instructions.md

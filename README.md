@@ -106,9 +106,27 @@ docker compose up --build
 
 Sau khi server khởi động, mở `http://localhost:3001`. Giữ terminal đang chạy; nhấn `Ctrl+C` để dừng. Lần sau có thể chạy `docker compose up` để khởi động lại.
 
-Container mặc định chạy ChatMatch không bật upload Azure. Muốn dùng Azure Blob Storage, sao chép `.env.docker.example` thành `.env` ở thư mục gốc repository rồi điền cấu hình Storage và thông tin xác thực Azure phù hợp. `az login` trên Windows không tự đăng nhập bên trong container. Không commit file `.env` hoặc chia sẻ `AZURE_CLIENT_SECRET`/`ATTACHMENT_TOKEN_SECRET`.
+Docker Compose khởi chạy ChatMatch cùng Redis; Redis AOF được lưu trong volume `redis_data`. Redis cần được bật để dùng hàng đợi dùng chung và bộ đếm quota upload. Container mặc định không bật upload Azure. Muốn dùng Azure Blob Storage, sao chép `.env.docker.example` thành `.env` ở thư mục gốc repository rồi điền cấu hình Storage và Service Principal. `az login` trên Windows không tự đăng nhập bên trong container. Không commit file `.env` hoặc chia sẻ `AZURE_CLIENT_SECRET`/`ATTACHMENT_TOKEN_SECRET`.
 
-Docker Desktop chỉ chạy container trên máy hiện tại, chưa đưa website lên Internet. Muốn public, cần triển khai image lên VPS/server và cấu hình mạng, tên miền, HTTPS riêng.
+Docker Desktop chỉ chạy container trên máy hiện tại, chưa đưa website lên Internet. Muốn public, cần triển khai image lên nền tảng server. Render dùng `render.yaml` để tạo Docker Web Service `group9ltm` và Redis-compatible Key Value riêng; Render không chạy Redis trong cùng container hay triển khai nguyên Docker Compose stack. Dịch vụ Render Free có thể sleep khi không hoạt động; Redis Free không lưu bền và có thể mất dữ liệu khi restart.
+
+### Public ứng dụng trên Render (không dùng Cloudflare)
+
+`render.yaml` cấu hình một Docker Web Service `group9ltm` và một Render Key Value riêng, cùng region Singapore. Frontend và WebSocket dùng chung domain; trình duyệt tự kết nối `wss://` khi trang được mở bằng HTTPS của Render. Không cần Cloudflare Tunnel, VPS, hoặc mở cổng Redis công khai.
+
+1. Đẩy thay đổi lên GitHub và merge vào nhánh `main`. Blueprint chỉ deploy nhánh `main`; các commit mới trên nhánh đó tự kích hoạt deploy.
+2. Trong Render Dashboard, tạo **Blueprint Instance** từ repository `leetaemin02/Group9LTM` và xác nhận tạo cả `group9ltm` cùng `group9ltm-redis`. Nếu Render yêu cầu region, giữ Singapore cho cả hai.
+3. Khi Render hỏi các biến `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` và `ATTACHMENT_TOKEN_SECRET`, nhập chúng trong giao diện Render dưới dạng secret. `ATTACHMENT_TOKEN_SECRET` phải có ít nhất 32 byte; không đưa secrets vào Git. Azure Service Principal cần quyền phù hợp để ghi và đọc Blob, đồng thời tài khoản Storage phải bật malware scanning nếu muốn giữ kiểm tra tệp nghiêm ngặt.
+4. Chờ Web Service deploy thành công, mở URL `onrender.com` do Render hiển thị trên trang dịch vụ và thử ghép hai trình duyệt/thiết bị khác nhau, gửi tin nhắn và kiểm tra upload.
+5. Để cập nhật website, merge thay đổi qua quy trình Git của dự án vào `main`. Render tự build/deploy; không cần cập nhật Cloudflare hay nhấn “Sync changes” để deploy.
+
+**Giới hạn quan trọng của lựa chọn Free:** Render sẽ cho Web Service ngủ sau 15 phút không có lưu lượng; lần truy cập/kết nối WebSocket tiếp theo có thể mất khoảng một phút để khởi động. Render Key Value Free chỉ giữ dữ liệu trong bộ nhớ và có thể mất toàn bộ dữ liệu khi restart hoặc bảo trì. Điều này có thể làm mất hàng đợi và reset bộ đếm quota upload 500 MB; giới hạn này vì vậy không đảm bảo là trần chi phí cứng. Free phù hợp thử nghiệm/hobby, không đảm bảo website luôn sẵn sàng 24/7. Muốn tránh sleep và có Redis persistence cần nâng cấp các dịch vụ tương ứng lên gói trả phí.
+
+### Giới hạn upload
+
+Backend chỉ nhận file upload khi Redis đang bật và kết nối sẵn sàng. Redis dự trữ quota atomically trước khi nhận nội dung file: tối đa 5 file và 50 MiB cho mỗi cuộc trò chuyện, cùng giới hạn trọn đời 500,000,000 bytes (500 MB thập phân) trên toàn hệ thống. Khi đạt giới hạn toàn hệ thống, upload mới bị từ chối cho tới khi bộ đếm được reset thủ công; xóa blob không hoàn lại quota. Một upload được tính khi HTTP upload bắt đầu, nên upload thất bại sau bước reserve vẫn có thể tiêu quota để tránh cấp vượt hạn mức.
+
+Giới hạn trọn đời chỉ là best-effort khi dùng Render Key Value Free: instance miễn phí không ghi liên tục dữ liệu xuống đĩa, và restart có thể làm mất counter, khiến giới hạn bắt đầu lại. Không dùng cấu hình này làm cam kết cứng về chi phí Azure. Redis local trong Compose có AOF/volume; điều này không thay đổi tính bền vững của Render Free Key Value. Azure vẫn có thể tính phí giao dịch, quét malware và tải xuống; đặt Azure budget alert riêng.
 
 ### Bật kiểm tra danh tiếng liên kết (tùy chọn)
 
