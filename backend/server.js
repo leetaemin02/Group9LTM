@@ -27,7 +27,10 @@ const {
 const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
 const Moderation = require('./moderation');
-const RedisManager = require('./redisManager');
+const RedisManager = require('./redis/redisManager');
+
+const {addViolation, getBanRemaining, instantBan} = require('./redis/violationStore')
+
 const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
 const { analyzeLinkSafety } = require('./linkSafety');
 const { checkMessageLinks } = require('./webRisk');
@@ -37,6 +40,7 @@ const {
 } = require('./attachmentStorage');
 const { getRandomIcebreaker } = require('./icebreakers');
 const { CompanionBot } = require('./companionBot');
+
 
 // ─── Cấu hình ──────────────────────────────────────────────────────────────
 
@@ -322,52 +326,7 @@ wss.on('error', (err) => {
 const clients = new Map();
 const pendingChatMessages = new Map();
 
-// Lưu số lần cảnh cáo theo thiết bị trong thời gian server hoạt động
-const violationStrikes = new Map();
-
-const MAX_VIOLATION_STRIKES = 3;
-const STRIKE_TTL_MS = 24 * 60 * 60 * 1000; // 24 giờ
-
-function getStrikeKey(client) {
-  // deviceId được cung cấp từ client, chỉ dùng tạm cho bản thử nghiệm
-  if (!client.deviceId) return null;
-
-  return `device:${client.deviceId}`;
-}
-
-function addViolationStrike(client) {
-  const key = getStrikeKey(client);
-
-  // Nếu không có deviceId, dùng bộ đếm trên kết nối hiện tại
-  if (!key) {
-    client.warningCount = (client.warningCount || 0) + 1;
-    return client.warningCount;
-  }
-
-  const now = Date.now();
-  const previous = violationStrikes.get(key);
-
-  const count = previous && previous.expiresAt > now
-    ? previous.count + 1
-    : 1;
-
-  violationStrikes.set(key, {
-    count,
-    expiresAt: now + STRIKE_TTL_MS,
-  });
-
-  return count;
-}
-
-function clearViolationStrikes(client) {
-  const key = getStrikeKey(client);
-
-  if (key) {
-    violationStrikes.delete(key);
-  }
-
-  client.warningCount = 0;
-}
+const pendingGameActions = new Map();
 
 // ─── Khởi tạo modules ─────────────────────────────────────────────────────
 
@@ -568,6 +527,103 @@ function startSoloSession(clientId) {
 
 // ─── Xử lý từng loại message ──────────────────────────────────────────────
 
+
+async function ensureNotRedisBanned(clientId) {
+  const client = clients.get(clientId);
+  if (!client) return false;
+
+  if (!client.deviceId) {
+    sendTo(clientId, serverMsg.error(
+      'DEVICE_ID_REQUIRED',
+      'Không thể xác định thiết bị để kiểm tra vi phạm.'
+    ));
+    return false;
+  }
+
+  // Giới hạn thời gian chờ Redis là 2 giây
+  let timeoutId;
+
+  try {
+    const remainingBan = await Promise.race([
+      getBanRemaining(client.deviceId),
+
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('REDIS_TIMEOUT'));
+        }, 2000);
+      })
+    ]);
+
+    // Kiểm tra kết nối còn tồn tại sau khi chờ Redis
+    if (clients.get(clientId) !== client) {
+      return false;
+    }
+
+    if (remainingBan > 0) {
+      sendTo(clientId, serverMsg.error(
+        ERROR_CODES.BANNED,
+        `Bạn đang bị cấm trong ${remainingBan} giây nữa.`
+      ));
+      return false;
+    }
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      '[Redis Ban] Không thể kiểm tra trạng thái ban:',
+      error.message
+    );
+
+    // Fail-Closed: Redis lỗi thì không cho tương tác với người thật
+    if (clients.get(clientId) === client) {
+      sendTo(clientId, serverMsg.error(
+        'REDIS_UNAVAILABLE',
+        'Hệ thống kiểm tra an toàn đang tạm gián đoạn. Vui lòng thử lại sau.'
+      ));
+    }
+
+    return false;
+
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+
+
+
+async function canPerformGameAction(clientId) {
+  const client = clients.get(clientId);
+
+  if (!client || client.state !== 'CHATTING') {
+    return false;
+  }
+
+  // Phòng Lumi được phép chơi dù đang bị ban
+  if (roomManager.isBotRoom(clientId)) {
+    return true;
+  }
+
+  // Ghi nhớ người đang chơi cùng trước khi gọi Redis
+  const partnerId = roomManager.getPartnerId(clientId);
+  if (!partnerId) return false;
+
+  // Phòng người thật phải kiểm tra Redis Ban
+  if (!(await ensureNotRedisBanned(clientId))) {
+    return false;
+  }
+
+  // Chống tình trạng đổi phòng trong khi chờ Redis
+  return (
+    clients.get(clientId) === client &&
+    client.state === 'CHATTING' &&
+    !roomManager.isBotRoom(clientId) &&
+    roomManager.getPartnerId(clientId) === partnerId
+  );
+}
+
+
 const messageHandlers = {
   // ── join ──────────────────────────────────────────────
   [CLIENT_TYPES.JOIN](clientId, payload) {
@@ -593,14 +649,18 @@ const messageHandlers = {
   },
 
   // ── find_match ────────────────────────────────────────
-  [CLIENT_TYPES.FIND_MATCH](clientId) {
+  async [CLIENT_TYPES.FIND_MATCH](clientId) {
     const client = clients.get(clientId);
     if (!client) return;
 
-    // Kiểm tra có đang bị cấm do phát ngôn bậy / vi phạm tiêu chuẩn cộng đồng không
-    const banCheck = moderation.isBanned(clientId, client.clientIp);
-    if (banCheck.banned) {
-      sendTo(clientId, serverMsg.error(ERROR_CODES.BANNED, `Tài khoản của bạn tạm thời bị cấm kết nối (${banCheck.remainingSec}s còn lại). Lý do: ${banCheck.reason}`));
+    // kiem tra ban redis
+    if (!(await ensureNotRedisBanned(clientId))) {
+    return;
+    }
+
+    // Trong khi chờ Redis, kết nối có thể đã ngắt
+    // hoặc trạng thái người dùng đã thay đổi
+    if (clients.get(clientId) !== client) {
       return;
     }
 
@@ -661,6 +721,22 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client) return;
 
+    // Kiểm tra người dùng có đang trong phòng chat không
+    if (client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(
+        ERROR_CODES.NOT_IN_ROOM,
+        'Bạn chưa ở trong phòng chat'
+      ));
+      return;
+    }
+
+    // Chỉ kiểm tra ban Redis khi chat với người thật
+    if (!roomManager.isBotRoom(clientId)) {
+      if (!(await ensureNotRedisBanned(clientId))) {
+        return;
+      }
+    }
+
     if (client.state !== 'CHATTING') {
       sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat'));
       return;
@@ -669,6 +745,36 @@ const messageHandlers = {
     // 1. Rate limit
     if (!moderation.checkRateLimit(clientId)) {
       sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin quá nhanh, vui lòng chờ'));
+      return;
+    }
+
+    
+    // Xử lý riêng cho phòng Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const filterResult = checkContent(payload.text);
+
+      if (filterResult.isViolation) {
+        // Tầng 1: Che từ không phù hợp
+        if (filterResult.action === MODERATION_ACTIONS.MASK) {
+          payload.text = maskProfanity(payload.text);
+        }
+
+        // Tầng 2, 3, 4: Chặn tin nhưng không cộng lỗi Redis
+        else {
+          sendTo(clientId, serverMsg.error(
+            'MESSAGE_BLOCKED',
+            'Nội dung không phù hợp. Vui lòng diễn đạt lại.'
+          ));
+          return;
+        }
+      }
+
+      const bot = roomManager.getBot(clientId);
+
+      if (bot) {
+        bot.handleUserMessage(payload.text);
+      }
+
       return;
     }
 
@@ -688,36 +794,107 @@ const messageHandlers = {
         return; // Dừng lại, không gửi cho đối phương
       }
       // ════════ TẦNG 3: Xúc phạm danh dự / Gạ tình 18+ -> Cảnh cáo 3 lần mới ban ════════
+      
       else if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
-        const strikeCount = addViolationStrike(client)
-        if (strikeCount < MAX_VIOLATION_STRIKES) {
-          // Chưa đủ 3 lần -> Chặn tin nhắn + Cảnh cáo
+
+        // Bước 1: Ghi nhận vi phạm trong Redis
+        let result;
+
+        try {
+          result = await addViolation(client.deviceId);
+        } catch (error) {
+          console.error(
+            '[Redis Violation] Không thể ghi nhận vi phạm:',
+            error.message
+          );
+
           sendTo(clientId, serverMsg.error(
-            'VIOLATION_WARNING',
-            `Cảnh báo (${strikeCount}/${MAX_VIOLATION_STRIKES}): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Tái phạm 3 lần bạn sẽ bị cấm 10 phút!`
+            'MODERATION_UNAVAILABLE',
+            'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'
           ));
+
           return;
         }
-        // Đã vi phạm lần thứ 3 -> Ban 10 phút & Kick
-        console.warn(`[Server] 🚫 Tái phạm 3 lần: ${client.nickname} (${clientId}) - Lý do: ${filterResult.category}`);
-        const banExpiresAt = moderation.ban(clientId, client.clientIp, `Tái phạm 3 lần: ${filterResult.category}`);
-        const partnerId = roomManager.getPartnerId(clientId);
-        if (partnerId) {
-          notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị hệ thống buộc rời phòng do tái phạm tiêu chuẩn cộng đồng nhiều lần.');
+
+
+        // Bước 2: Chưa đủ 3 lần → cảnh cáo
+        if (!result.banned) {
+          sendTo(clientId, serverMsg.error(
+            'VIOLATION_WARNING',
+            `Cảnh báo (${result.count}/3): Tin nhắn vi phạm ` +
+            `tiêu chuẩn cộng đồng (${filterResult.category}). ` +
+            `Đủ 3 lần trong 3 giờ sẽ bị cấm 10 phút!`
+          ));
+
+          return;
         }
-        sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm tiêu chuẩn cộng đồng 3 lần.', banExpiresAt));
+
+        // Bước 3: Đã đủ 3 lỗi → Redis đã tạo ban và xóa lỗi
+        console.warn(
+          `[Server] Redis ban: ${client.nickname} (${clientId})`
+        );
+
+        // Thời điểm ban hết hạn, dùng cho phản hồi WebSocket
+        const banExpiresAt = Date.now() + result.remainingBan * 1000;
+
+        // Bước 4: Thông báo cho người đang chat cùng
+        const partnerId = roomManager.getPartnerId(clientId);
+
+        if (partnerId) {
+          notifyRoomLeft(
+            clientId,
+            partnerId,
+            'Đối phương đã bị buộc rời phòng do vi phạm.'
+          );
+
+          const partner = clients.get(partnerId);
+          if (partner) {
+            partner.state = 'CONNECTED';
+          }
+        }
+
+        // Bước 5: Kick người vi phạm khỏi phòng
+        sendTo(
+          clientId,
+          serverMsg.kicked(
+            'Bạn đã bị cấm 10 phút do vi phạm 3 lần.',
+            banExpiresAt
+          )
+        );
+
         roomManager.removeClient(clientId);
         client.state = 'CONNECTED';
-        clearViolationStrikes(client); // Reset sau khi ban
+
         return;
       }
+
       // ════════ TẦNG 4: Ma túy, Cờ bạc lừa đảo -> Chặn ngay + Ban 10 phút lập tức ════════
       else if (filterResult.action === MODERATION_ACTIONS.INSTANT_BAN) {
         console.warn(`[Server] 🚫 Vi phạm nghiêm trọng: ${client.nickname} (${clientId}) - ${filterResult.reason}`);
-        const banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
-        if (redisManager.isConnected) {
-          redisManager.addBlock(clientId, client.clientIp, 600);
+
+
+        let banResult;
+
+        try {
+          banResult = await instantBan(client.deviceId);
+        } catch (error) {
+          console.error(
+            '[Redis Ban] Không thể ghi nhận ban tức thì:',
+            error.message
+          );
+
+          sendTo(clientId, serverMsg.error(
+            'MODERATION_UNAVAILABLE',
+            'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'
+          ));
+
+          return;
         }
+
+        const banExpiresAt =
+          Date.now() + banResult.remainingBan * 1000;
+
+
         const partnerId = roomManager.getPartnerId(clientId);
         if (partnerId) {
           const partner = clients.get(partnerId);
@@ -732,15 +909,6 @@ const messageHandlers = {
         client.state = 'CONNECTED';
         return;
       }
-    }
-
-    // Kiểm tra nếu đang ở phòng trò chuyện cùng Bạn Đồng Hành Lumi
-    if (roomManager.isBotRoom(clientId)) {
-      const bot = roomManager.getBot(clientId);
-      if (bot) {
-        bot.handleUserMessage(payload.text);
-      }
-      return;
     }
 
     const partnerId = roomManager.getPartnerId(clientId);
@@ -788,7 +956,7 @@ const messageHandlers = {
     }
   },
 
-  [CLIENT_TYPES.ATTACHMENT_REQUEST](clientId, payload) {
+  async [CLIENT_TYPES.ATTACHMENT_REQUEST](clientId, payload) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING' || roomManager.isBotRoom(clientId)) {
       sendTo(clientId, serverMsg.error('ATTACHMENT_NOT_AVAILABLE', 'Chỉ có thể gửi tệp khi đang trò chuyện với người dùng.'));
@@ -796,6 +964,25 @@ const messageHandlers = {
     }
     if (!moderation.checkRateLimit(clientId)) {
       sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi quá nhanh, vui lòng chờ.'));
+      return;
+    }
+
+    // Ghi nhớ người đang chat cùng trước khi kiểm tra Redis
+    const partnerBeforeCheck = roomManager.getPartnerId(clientId);
+
+    if (!partnerBeforeCheck) return;
+
+    // Kiểm tra Redis Ban
+    if (!(await ensureNotRedisBanned(clientId))) {
+      return;
+    }
+
+    // Kiểm tra lại phòng sau khi await
+    if (
+      clients.get(clientId) !== client ||
+      client.state !== 'CHATTING' ||
+      roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+    ) {
       return;
     }
 
@@ -822,6 +1009,21 @@ const messageHandlers = {
   async [CLIENT_TYPES.ATTACHMENT_SEND](clientId, payload) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING' || roomManager.isBotRoom(clientId)) return;
+
+    const partnerBeforeCheck = roomManager.getPartnerId(clientId);
+    if (!partnerBeforeCheck) return;
+
+    if (!(await ensureNotRedisBanned(clientId))) {
+      return;
+    }
+
+    if (
+      clients.get(clientId) !== client ||
+      client.state !== 'CHATTING' ||
+      roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+    ) {
+      return;
+    }
 
     let claims;
     try {
@@ -869,21 +1071,38 @@ const messageHandlers = {
   },
 
   // ── typing ────────────────────────────────────────────
-  [CLIENT_TYPES.TYPING](clientId, payload) {
+  async [CLIENT_TYPES.TYPING](clientId, payload) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
     // Nếu là phòng Bot thì không cần chuyển tiếp
     if (roomManager.isBotRoom(clientId)) return;
 
-    const partnerId = roomManager.getPartnerId(clientId);
-    if (!partnerId) return;
+    const partnerBeforeCheck = roomManager.getPartnerId(clientId);
+    if (!partnerBeforeCheck) return;
 
-    sendTo(partnerId, serverMsg.typing(payload.isTyping));
+    // Chặn gửi trạng thái đang nhập cho người thật nếu bị ban
+    if (!(await ensureNotRedisBanned(clientId))) {
+      return;
+    }
+
+    // Kiểm tra phòng vẫn còn nguyên sau khi chờ Redis
+    if (
+      clients.get(clientId) !== client ||
+      client.state !== 'CHATTING' ||
+      roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+    ) {
+      return;
+    }
+
+    sendTo(
+      partnerBeforeCheck,
+      serverMsg.typing(payload.isTyping)
+    );
   },
 
   // ── voice ─────────────────────────────────────────────
-  [CLIENT_TYPES.VOICE](clientId, payload) {
+  async [CLIENT_TYPES.VOICE](clientId, payload) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') {
       sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
@@ -893,6 +1112,31 @@ const messageHandlers = {
       sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
       return;
     }
+
+    
+    // Kiểm tra ban khi gửi voice cho người thật
+    if (!roomManager.isBotRoom(clientId)) {
+      const partnerBeforeCheck =
+        roomManager.getPartnerId(clientId);
+
+      if (!partnerBeforeCheck) return;
+
+      // Kiểm tra trạng thái ban trong Redis
+      if (!(await ensureNotRedisBanned(clientId))) {
+        return;
+      }
+
+      // Kiểm tra lại sau khi await Redis
+      if (
+        clients.get(clientId) !== client ||
+        client.state !== 'CHATTING' ||
+        roomManager.isBotRoom(clientId) ||
+        roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+      ) {
+        return;
+      }
+    }
+
 
     const timestamp = new Date().toISOString();
 
@@ -918,7 +1162,7 @@ const messageHandlers = {
   },
 
   // ── meme & sticker ────────────────────────────────────
-  [CLIENT_TYPES.MEME](clientId, payload) {
+  async [CLIENT_TYPES.MEME](clientId, payload) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') {
       sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
@@ -927,6 +1171,27 @@ const messageHandlers = {
     if (!moderation.checkRateLimit(clientId)) {
       sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
       return;
+    }
+    // Chỉ kiểm tra ban khi gửi meme/sticker cho người thật
+    if (!roomManager.isBotRoom(clientId)) {
+      const partnerBeforeCheck =
+        roomManager.getPartnerId(clientId);
+
+      if (!partnerBeforeCheck) return;
+
+      if (!(await ensureNotRedisBanned(clientId))) {
+        return;
+      }
+
+      // Xác nhận phòng chat không thay đổi khi chờ Redis
+      if (
+        clients.get(clientId) !== client ||
+        client.state !== 'CHATTING' ||
+        roomManager.isBotRoom(clientId) ||
+        roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+      ) {
+        return;
+      }
     }
 
     const timestamp = new Date().toISOString();
@@ -964,11 +1229,33 @@ const messageHandlers = {
   },
 
   // ── skip ──────────────────────────────────────────────
-  [CLIENT_TYPES.SKIP](clientId) {
+  async [CLIENT_TYPES.SKIP](clientId) {
     const client = clients.get(clientId);
     if (!client) return;
 
     if (client.state !== 'CHATTING') return;
+
+    // Ghi nhớ phòng chat ban đầu
+    const roomBeforeCheck = roomManager.getRoomId(clientId);
+
+    if (!roomBeforeCheck) return;
+
+    // SKIP sẽ chuyển người dùng sang tìm người thật
+    // Vì vậy phải kiểm tra ban trước khi rời phòng hiện tại
+    if (!(await ensureNotRedisBanned(clientId))) {
+      return;
+    }
+
+    // Sau khi chờ Redis, kiểm tra lại trạng thái
+
+  if (
+    clients.get(clientId) !== client ||
+    client.state !== 'CHATTING' ||
+    roomManager.getRoomId(clientId) !== roomBeforeCheck
+  ) {
+    return;
+  }
+
 
     // Nếu đang ở phòng Bot Đồng Hành -> chuyển sang hàng đợi tìm người thật
     if (roomManager.isBotRoom(clientId)) {
@@ -1053,7 +1340,7 @@ const messageHandlers = {
   },
 
   // ── report ────────────────────────────────────────────
-  [CLIENT_TYPES.REPORT](clientId, payload) {
+  async [CLIENT_TYPES.REPORT](clientId, payload) {
     const client = clients.get(clientId);
     if (!client) return;
 
@@ -1091,16 +1378,63 @@ const messageHandlers = {
       }
     }
 
-    // Đưa người report vào hàng đợi
+    // Trước tiên chuyển về trạng thái CONNECTED
+    client.state = 'CONNECTED';
+
+    // Kiểm tra ban trước khi tìm người mới
+    if (!(await ensureNotRedisBanned(clientId))) {
+      return;
+    }
+
+    // Tránh đưa kết nối đã đóng hoặc đổi trạng thái vào hàng đợi
+    if (
+      clients.get(clientId) !== client ||
+      client.state !== 'CONNECTED'
+    ) {
+      return;
+    }
+
     client.state = 'WAITING';
     sendTo(clientId, serverMsg.waiting());
-    matchmaker.enqueue(clientId, client.nickname, client.interests, client.mood, client.clientIp, client.deviceId);
+
+    matchmaker.enqueue(
+      clientId,
+      client.nickname,
+      client.interests,
+      client.mood,
+      client.clientIp,
+      client.deviceId
+    );
   },
 
   // ── icebreaker (câu hỏi phá băng gợi ý mở đầu) ─────────
-  [CLIENT_TYPES.ICEBREAKER](clientId) {
+  async [CLIENT_TYPES.ICEBREAKER](clientId) {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
+
+    
+    // Chỉ kiểm tra Redis Ban khi chat với người thật
+    if (!roomManager.isBotRoom(clientId)) {
+      const partnerBeforeCheck =
+        roomManager.getPartnerId(clientId);
+
+      if (!partnerBeforeCheck) return;
+
+      if (!(await ensureNotRedisBanned(clientId))) {
+        return;
+      }
+
+      // Kiểm tra phòng không thay đổi khi chờ Redis
+      if (
+        clients.get(clientId) !== client ||
+        client.state !== 'CHATTING' ||
+        roomManager.isBotRoom(clientId) ||
+        roomManager.getPartnerId(clientId) !== partnerBeforeCheck
+      ) {
+        return;
+      }
+    }
+
 
     const roomId = roomManager.getRoomId(clientId);
     if (!roomId) return;
@@ -1133,7 +1467,9 @@ const messageHandlers = {
   },
 
   // ── game_invite (mời chơi minigame 1-1) ────────────────
-  [CLIENT_TYPES.GAME_INVITE](clientId, payload) {
+  async [CLIENT_TYPES.GAME_INVITE](clientId, payload) {
+    if (!(await canPerformGameAction(clientId))) return;
+
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
@@ -1161,10 +1497,17 @@ const messageHandlers = {
       fromName: client.nickname,
       size: requestedSize,
     }));
+
+    sendTo(clientId, serverMsg.gameState({
+      action: 'invite_sent',
+      size: requestedSize,
+    }));
   },
 
   // ── game_accept (nhận lời chơi minigame) ──────────────
-  [CLIENT_TYPES.GAME_ACCEPT](clientId, payload) {
+  async [CLIENT_TYPES.GAME_ACCEPT](clientId, payload) {
+    if (!(await canPerformGameAction(clientId))) return;
+
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
@@ -1184,8 +1527,11 @@ const messageHandlers = {
   },
 
   // ── game_move (nước đi minigame) ──────────────────────
-  [CLIENT_TYPES.GAME_MOVE](clientId, payload) {
+  async [CLIENT_TYPES.GAME_MOVE](clientId, payload) {
+    if (!(await canPerformGameAction(clientId))) return;
+
     const client = clients.get(clientId);
+
     if (!client || client.state !== 'CHATTING') return;
 
     const roomId = roomManager.getRoomId(clientId);
@@ -1259,7 +1605,9 @@ const messageHandlers = {
   },
 
   // ── game_reset (chơi lại ván mới) ─────────────────────
-  [CLIENT_TYPES.GAME_RESET](clientId, payload) {
+  async [CLIENT_TYPES.GAME_RESET](clientId, payload) {
+    if (!(await canPerformGameAction(clientId))) return;
+
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
@@ -1294,7 +1642,9 @@ const messageHandlers = {
   },
 
   // ── game_quit (thoát minigame) ────────────────────────
-  [CLIENT_TYPES.GAME_QUIT](clientId) {
+  async [CLIENT_TYPES.GAME_QUIT](clientId) {
+    if (!(await canPerformGameAction(clientId))) return;
+
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
@@ -1407,6 +1757,48 @@ wss.on('connection', (ws, req) => {
     // 3. Dispatch đến handler tương ứng
     const handler = messageHandlers[type];
     if (handler) {
+      
+      // Các hành động Caro cần xử lý theo thứ tự của từng client
+      const gameActions = new Set([
+        CLIENT_TYPES.GAME_INVITE,
+        CLIENT_TYPES.GAME_ACCEPT,
+        CLIENT_TYPES.GAME_MOVE,
+        CLIENT_TYPES.GAME_RESET,
+        CLIENT_TYPES.GAME_QUIT
+      ]);
+
+      if (gameActions.has(type)) {
+        const previous =
+          pendingGameActions.get(clientId) || Promise.resolve();
+
+        const pending = previous
+          .then(() => handler(clientId, validateResult.sanitized))
+          .catch((error) => {
+            console.error(
+              `[Game] Failed to process ${type} from ${clientId}:`,
+              error
+            );
+
+            sendTo(
+              clientId,
+              serverMsg.error(
+                'GAME_PROCESSING_FAILED',
+                'Không thể xử lý thao tác Caro lúc này.'
+              )
+            );
+          });
+
+        pendingGameActions.set(clientId, pending);
+
+        pending.then(() => {
+          if (pendingGameActions.get(clientId) === pending) {
+            pendingGameActions.delete(clientId);
+          }
+        });
+
+        return;
+      }
+
       if (type === CLIENT_TYPES.MESSAGE) {
         const previous = pendingChatMessages.get(clientId) || Promise.resolve();
         const pending = previous
@@ -1457,6 +1849,8 @@ function handleDisconnect(clientId) {
 
   // Xóa client ngay lập tức để tránh xử lý trùng lặp do event close + error
   clients.delete(clientId);
+
+  pendingGameActions.delete(clientId);
 
   if (client.soloHintTimer) {
     clearTimeout(client.soloHintTimer);
