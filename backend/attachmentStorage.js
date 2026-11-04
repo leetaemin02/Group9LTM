@@ -221,6 +221,7 @@ function createAttachmentStorage({
       || claims.expiresAt <= now()
       || typeof claims.clientId !== 'string'
       || typeof claims.partnerId !== 'string'
+      || (claims.conversationId !== null && typeof claims.conversationId !== 'string')
       || typeof claims.blobName !== 'string'
     ) {
       throw new AttachmentError('Mã tải tệp đã hết hạn hoặc không đúng phiên.', 401);
@@ -228,7 +229,7 @@ function createAttachmentStorage({
     return claims;
   }
 
-  function issueUploadTicket(clientId, partnerId, fileName, size) {
+  function issueUploadTicket(clientId, partnerId, fileName, size, conversationId = null) {
     if (!enabled) throw new AttachmentError('Tính năng gửi tệp chưa được cấu hình.', 503);
     const normalizedName = normalizeFileName(fileName);
     const policy = getFilePolicy(normalizedName, size);
@@ -237,6 +238,7 @@ function createAttachmentStorage({
       uploadId,
       clientId,
       partnerId,
+      conversationId,
       fileName: normalizedName,
       contentType: policy.contentType,
       category: policy.category,

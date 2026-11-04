@@ -1,7 +1,21 @@
+
 # Dependencies
 node_modules/
 
-# Biến môi trường / secrets (chỉ commit .env.example và .env.docker.example)
+# AI Agent & Skills
+.agents/
+AGENTS.md
+.claude/
+.cursor/
+.github/agents/
+.github/instructions/
+.github/prompts/
+.github/copilot-instructions.md
+
+# Docs
+docs/
+
+# Environment variables / secrets
 .env
 .env.*
 !.env.example
@@ -16,7 +30,3 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
-
-AGENTS.md
-docs/
-.agents/

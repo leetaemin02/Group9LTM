@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: group9ltm
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: USE_REDIS
+        value: "true"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: group9ltm-redis
+          property: connectionString
+      - key: AZURE_STORAGE_ACCOUNT_NAME
+        value: chatmatchfiles2026
+      - key: AZURE_STORAGE_CONTAINER_NAME
+        value: chat-attachments
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: ATTACHMENT_TOKEN_SECRET
+        sync: false
+      - key: SKIP_MALWARE_SCAN
+        value: "false"
+
+  - type: keyvalue
+    name: group9ltm-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: noeviction
