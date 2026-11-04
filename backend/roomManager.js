@@ -39,6 +39,8 @@ class RoomManager {
       bot: botInstance,
       createdAt: Date.now(),
       game: null, // Trạng thái minigame 1-1
+
+      disconnectedAt: new Map()
     };
 
     this.rooms.set(roomId, room);
@@ -114,6 +116,53 @@ class RoomManager {
     console.log(`[RoomManager] -Room: ${roomId}, totalRooms=${this.rooms.size}`);
     return clients;
   }
+
+
+// ghi nhan thoi diem nguoi dung mat ket noi
+markDisconnected(clientId) {
+  const roomId = this.getRoomId(clientId);
+  if (!roomId) return null;
+
+  const room = this.getRoom(roomId);
+  if (!room || room.isBotRoom) return null;
+
+  // Không ghi đè thời điểm nếu đã đánh dấu offline
+  if (!room.disconnectedAt.has(clientId)) {
+    room.disconnectedAt.set(clientId, Date.now());
+  }
+
+  return {
+    roomId,
+    partnerId: this.getPartnerId(clientId),
+    disconnectedAt: room.disconnectedAt.get(clientId)
+  };
+}
+
+
+// xoa thoi diem nguoi dung mat ket noi 
+clearDisconnected(clientId) {
+  const roomId = this.getRoomId(clientId);
+  if (!roomId) return false;
+
+  const room = this.getRoom(roomId);
+  if (!room) return false;
+
+  return room.disconnectedAt.delete(clientId);
+}
+
+//xac dinh nguoi dung mat ket noi tam thoi
+isDisconnected(clientId) {
+  const roomId = this.getRoomId(clientId);
+  if (!roomId) return false;
+
+  const room = this.getRoom(roomId);
+  if (!room) return false;
+
+  return room.disconnectedAt.has(clientId);
+}
+
+
+
 
   /**
    * Xóa client khỏi phòng (khi rời hoặc mất kết nối).

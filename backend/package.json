@@ -11,6 +11,7 @@
   "dependencies": {
     "@azure/identity": "4.10.0",
     "@azure/storage-blob": "12.27.0",
+    "dotenv": "^18.0.9",
     "ioredis": "^6.0.0",
     "uuid": "^14.0.3",
     "ws": "^8.22.1"

@@ -11,6 +11,8 @@
 
 'use strict';
 
+require('dotenv').config();
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -28,7 +30,7 @@ const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
 const Moderation = require('./moderation');
 const RedisManager = require('./redis/redisManager');
-
+const ResumeSessionManager = require('./redis/resumeSession');
 const {addViolation, getBanRemaining, instantBan} = require('./redis/violationStore')
 
 const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
@@ -46,6 +48,7 @@ const { CompanionBot } = require('./companionBot');
 
 const PORT = process.env.PORT || 3001;
 const HEARTBEAT_INTERVAL = 30_000; // 30 giây
+const ROOM_RECONNECT_TIMEOUT = 30_000; //giu phong 30s khi mat ket noi
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
 const attachmentStorage = createAttachmentStorage();
 const pendingAttachmentCompletions = new Set();
@@ -328,10 +331,20 @@ const pendingChatMessages = new Map();
 
 const pendingGameActions = new Map();
 
+// Lưu timer chờ kết nối lại theo clientId
+const reconnectTimers = new Map();
+// clientId cũ -> thông tin phiên trước khi mất kết nối
+const disconnectedClients = new Map();
+
+// Chặn hai yêu cầu resume đồng thời cho cùng một phiên
+const resumingClients = new Set();
+
 // ─── Khởi tạo modules ─────────────────────────────────────────────────────
 
 const roomManager = new RoomManager();
 const moderation = new Moderation();
+
+const resumeSessionManager = new ResumeSessionManager();
 
 const redisManager = new RedisManager({
   onDirectMessage: (targetClientId, msgString) => {
@@ -455,6 +468,29 @@ function handleMatchFound(entry1, entry2, commonInterests) {
 
   // Tạo phòng chat
   const roomId = roomManager.createRoom(entry1.clientId, entry2.clientId);
+
+  // Cấp Resume Token riêng cho từng người trong phòng
+  const token1 = client1
+    ? resumeSessionManager.createSession(entry1.clientId, roomId)
+    : null;
+
+  const token2 = client2
+    ? resumeSessionManager.createSession(entry2.clientId, roomId)
+    : null;
+
+  if (client1 && token1) {
+    sendTo(entry1.clientId, JSON.stringify({
+      type: 'resume_token',
+      payload: { token: token1 }
+    }));
+  }
+
+  if (client2 && token2) {
+    sendTo(entry2.clientId, JSON.stringify({
+      type: 'resume_token',
+      payload: { token: token2 }
+    }));
+  }
 
   // Cập nhật trạng thái
   if (client1) client1.state = 'CHATTING';
@@ -624,7 +660,195 @@ async function canPerformGameAction(clientId) {
 }
 
 
+async function handleResumeSession(temporaryId, payload) {
+  const temporaryClient = clients.get(temporaryId);
+
+  if (!temporaryClient || temporaryClient.state !== 'CONNECTED') {
+    return;
+  }
+
+  const ws = temporaryClient.ws;
+
+  const rejectResume = (message) => {
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'resume_failed',
+        payload: { message }
+      }));
+    }
+  };
+
+  // 1. Kiểm tra token
+  const session = resumeSessionManager.validateResumeToken(
+    payload.token
+  );
+
+  if (!session) {
+    rejectResume('Phiên khôi phục không hợp lệ hoặc đã hết hạn.');
+    return;
+  }
+
+  const oldId = session.clientId;
+  const roomId = session.roomId;
+
+  // 2. Không cho hai kết nối cùng khôi phục một phiên
+  if (resumingClients.has(oldId)) {
+    rejectResume('Phiên này đang được khôi phục.');
+    return;
+  }
+
+  resumingClients.add(oldId);
+
+  try {
+    // 3. Kiểm tra phòng và trạng thái kết nối cũ
+    const oldClient = disconnectedClients.get(oldId);
+
+    if (
+      !oldClient ||
+      clients.has(oldId) ||
+      roomManager.getRoomId(oldId) !== roomId ||
+      !roomManager.isDisconnected(oldId)
+    ) {
+      rejectResume('Không tìm thấy phòng chat cần khôi phục.');
+      return;
+    }
+
+    if (!oldClient.deviceId) {
+      rejectResume('Không thể xác thực thiết bị của phiên cũ.');
+      return;
+    }
+
+    // 4. Kiểm tra Redis Ban, giới hạn chờ 2 giây
+    let timeoutId;
+
+    let remainingBan;
+
+    try {
+      remainingBan = await Promise.race([
+        getBanRemaining(oldClient.deviceId),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error('REDIS_TIMEOUT'));
+          }, 2000);
+        })
+      ]);
+    } catch (error) {
+      console.error('[Resume] Redis Ban:', error.message);
+      rejectResume('Hệ thống an toàn đang gián đoạn.');
+      return;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (remainingBan > 0) {
+      rejectResume(
+        `Bạn đang bị cấm trong ${remainingBan} giây nữa.`
+      );
+      return;
+    }
+
+    // 5. Kiểm tra lại sau khi chờ Redis
+    if (
+      clients.get(temporaryId) !== temporaryClient ||
+      temporaryClient.ws !== ws ||
+      ws.readyState !== 1 ||
+      clients.has(oldId) ||
+      disconnectedClients.get(oldId) !== oldClient ||
+      roomManager.getRoomId(oldId) !== roomId ||
+      !roomManager.isDisconnected(oldId) ||
+      !resumeSessionManager.validateResumeToken(payload.token)
+    ) {
+      rejectResume('Phiên khôi phục đã hết hạn hoặc thay đổi.');
+      return;
+    }
+
+    const room = roomManager.getRoom(roomId);
+    if (!room || room.isBotRoom) {
+      rejectResume('Phòng chat không còn tồn tại.');
+      return;
+    }
+
+    // 6. Gắn WebSocket mới vào clientId cũ
+    clients.delete(temporaryId);
+
+    Object.assign(temporaryClient, {
+      clientId: oldId,
+      deviceId: oldClient.deviceId,
+      nickname: oldClient.nickname,
+      interests: [...oldClient.interests],
+      mood: oldClient.mood,
+      warningCount: oldClient.warningCount || 0,
+      state: 'CHATTING',
+      isAlive: true
+    });
+
+    clients.set(oldId, temporaryClient);
+
+    // 7. Hủy thời gian chờ và xóa trạng thái offline
+    const timer = reconnectTimers.get(oldId);
+    if (timer) {
+      clearTimeout(timer);
+      reconnectTimers.delete(oldId);
+    }
+
+    roomManager.clearDisconnected(oldId);
+    disconnectedClients.delete(oldId);
+
+    // 8. Hủy token cũ, cấp token mới
+    const newToken = resumeSessionManager.createSession(
+      oldId,
+      roomId
+    );
+
+    const partnerId = roomManager.getPartnerId(oldId);
+
+    // 9. Thông báo khôi phục thành công
+    ws.send(JSON.stringify({
+      type: 'resume_success',
+      payload: {
+        clientId: oldId,
+        roomId,
+        partnerDisconnected: partnerId
+          ? roomManager.isDisconnected(partnerId)
+          : false,
+        game: room.game
+      }
+    }));
+
+    ws.send(JSON.stringify({
+      type: 'resume_token',
+      payload: { token: newToken }
+    }));
+
+    // 10. Đồng bộ online presence trong Redis
+    if (redisManager.enabled) {
+      try {
+        await redisManager.removeOnlineClient(temporaryId);
+        await redisManager.addOnlineClient(oldId);
+      } catch (error) {
+        console.error(
+          '[Resume] Không thể đồng bộ online presence:',
+          error.message
+        );
+      }
+    }
+
+    console.log(
+      `[Resume] Khôi phục thành công ${oldId} vào phòng ${roomId}`
+    );
+
+  } finally {
+    resumingClients.delete(oldId);
+  }
+}
+
+
+
 const messageHandlers = {
+
+  [CLIENT_TYPES.RESUME_SESSION](clientId, payload) {
+    return handleResumeSession(clientId, payload);
+  },
   // ── join ──────────────────────────────────────────────
   [CLIENT_TYPES.JOIN](clientId, payload) {
     const client = clients.get(clientId);
@@ -862,6 +1086,11 @@ const messageHandlers = {
           )
         );
 
+        // Thu hồi quyền khôi phục phòng của cả hai
+        cleanupResumeSession(clientId);
+        cleanupResumeSession(partnerId);
+
+        // Xóa phòng người thật
         roomManager.removeClient(clientId);
         client.state = 'CONNECTED';
 
@@ -905,6 +1134,12 @@ const messageHandlers = {
           notifyRoomLeft(clientId, partnerId, 'Đối phương đã bị buộc rời khỏi phòng do vi phạm nghiêm trọng tiêu chuẩn an toàn.');
         }
         sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
+
+        // Thu hồi token của cả hai người
+        cleanupResumeSession(clientId);
+        cleanupResumeSession(partnerId);
+
+        // Xóa phòng
         roomManager.removeClient(clientId);
         client.state = 'CONNECTED';
         return;
@@ -1283,7 +1518,13 @@ const messageHandlers = {
       return;
     }
 
+    const partnerId = roomManager.getPartnerId(clientId);
+
+    cleanupResumeSession(clientId);
+    cleanupResumeSession(partnerId);
+
     const result = roomManager.removeClient(clientId);
+
     if (result && result.partnerId) {
       // Thông báo đối phương
       notifyRoomLeft(clientId, result.partnerId);
@@ -1325,15 +1566,29 @@ const messageHandlers = {
       return;
     }
 
-    // Nếu đang ở phòng người thật
+    // Lấy thông tin đối phương trước khi xóa phòng
+    const partnerId = roomManager.getPartnerId(clientId);
+
+    // Thu hồi token của cả hai người
+    cleanupResumeSession(clientId);
+    cleanupResumeSession(partnerId);
+
+    // Xóa phòng chat
     const result = roomManager.removeClient(clientId);
-    if (result && result.partnerId) {
-      notifyRoomLeft(clientId, result.partnerId, 'Đối phương đã rời khỏi phòng chat.');
-      const partner = clients.get(result.partnerId);
-      if (partner) {
-        partner.state = 'CONNECTED';
-      }
+
+  if (result && result.partnerId) {
+    notifyRoomLeft(
+      clientId,
+      result.partnerId,
+      'Đối phương đã rời khỏi phòng chat.'
+    );
+
+    const partner = clients.get(result.partnerId);
+
+    if (partner) {
+      partner.state = 'CONNECTED';
     }
+  }
 
     client.state = 'CONNECTED';
     console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) đã về trang chủ`);
@@ -1369,8 +1624,13 @@ const messageHandlers = {
     // Xác nhận cho người report
     sendTo(clientId, serverMsg.reported());
 
-    // Kết thúc phòng chat (tương tự skip)
+    // Thu hồi token và hủy timer reconnect của cả hai
+    cleanupResumeSession(clientId);
+    cleanupResumeSession(partnerId);
+
+    // Kết thúc phòng chat
     const result = roomManager.removeClient(clientId);
+
     if (result && result.partnerId) {
       notifyRoomLeft(clientId, result.partnerId, 'Đối phương đã rời phòng sau báo cáo.');
       if (partner) {
@@ -1735,8 +1995,30 @@ wss.on('connection', (ws, req) => {
   });
 
   // ── Xử lý message ───────────────────────────────────
+
   ws.on('message', (rawData) => {
+    // clientId có thể thay đổi sau khi resume
+    const clientId = clientInfo.clientId;
+
+    // Chỉ WebSocket sở hữu phiên mới được gửi message
+    if (
+      clients.get(clientId) !== clientInfo ||
+      clientInfo.ws !== ws
+    ) {
+      return;
+    }
+
     const raw = rawData.toString();
+
+    // Chặn WebSocket cũ hoặc kết nối không còn sở hữu phiên
+    if (
+      clients.get(clientInfo.clientId) !== clientInfo ||
+      clientInfo.ws !== ws
+    ) {
+      return;
+    }
+
+    const activeClientId = clientInfo.clientId;
 
     // 1. Parse message
     const parseResult = parseMessage(raw);
@@ -1827,25 +2109,147 @@ wss.on('connection', (ws, req) => {
   });
 
   // ── Xử lý đóng kết nối ──────────────────────────────
-  ws.on('close', (code, reason) => {
-    console.log(`[Server] -Disconnected: ${clientInfo.nickname || clientId} (code=${code})`);
-    handleDisconnect(clientId);
+  ws.on('close', (code) => {
+    const currentId = clientInfo.clientId;
+    console.log(
+      `[Server] -Disconnected: ${clientInfo.nickname || currentId} (code=${code})`
+    );
+    handleDisconnect(currentId, ws);
   });
 
   // ── Xử lý lỗi ───────────────────────────────────────
   ws.on('error', (err) => {
-    console.error(`[Server] Error (${clientId}):`, err.message);
-    handleDisconnect(clientId);
+    console.error(
+      `[Server] Error (${clientInfo.clientId}):`,
+      err.message
+    );
+
+    handleDisconnect(clientInfo.clientId, ws);
   });
 });
+
+function cleanupResumeSession(clientId) {
+  if (!clientId) return;
+
+  // 1. Thu hồi Resume Token
+  resumeSessionManager.revokeSession(clientId);
+
+  // 2. Hủy timer giữ phòng
+  const timer = reconnectTimers.get(clientId);
+
+  if (timer) {
+    clearTimeout(timer);
+    reconnectTimers.delete(clientId);
+  }
+
+  // 3. Xóa thông tin phiên offline
+  disconnectedClients.delete(clientId);
+
+  // 4. Xóa trạng thái đang khôi phục
+  resumingClients.delete(clientId);
+}
+
+
+// ham giu phong
+function holdRoomForReconnect(clientId) {
+  // Đánh dấu người dùng mất kết nối trong RoomManager
+  const disconnected = roomManager.markDisconnected(clientId);
+
+  if (!disconnected) {
+    return false;
+  }
+
+  // Token bắt đầu có hạn khôi phục 30 giây
+  const marked = resumeSessionManager.markDisconnected(
+    clientId,
+    ROOM_RECONNECT_TIMEOUT
+  );
+
+  if (!marked) {
+    console.warn(
+      `[Resume] Không tìm thấy phiên khôi phục của ${clientId}`
+    );
+  }
+
+  const { roomId, partnerId } = disconnected;
+
+  // Tránh tạo nhiều timer cho cùng một client
+  if (reconnectTimers.has(clientId)) {
+    return true;
+  }
+
+  console.log(
+    `[Reconnect] Giữ phòng ${roomId} cho ${clientId} trong 30 giây`
+  );
+
+  const timer = setTimeout(() => {
+    reconnectTimers.delete(clientId);
+
+    // Kiểm tra phòng còn tồn tại và đúng phòng ban đầu
+    if (roomManager.getRoomId(clientId) !== roomId) {
+      return;
+    }
+
+    // Nếu đã khôi phục kết nối, không xóa phòng
+    if (!roomManager.isDisconnected(clientId)) {
+      return;
+    }
+
+    console.log(
+      `[Reconnect] Hết 30 giây, đóng phòng ${roomId}`
+    );
+
+    // Thu hồi token và thông tin phiên đã hết hạn
+    cleanupResumeSession(clientId);
+
+    const result = roomManager.removeClient(clientId);
+
+    if (result && result.partnerId) {
+
+      // Phòng không còn tồn tại nên đối phương cũng không thể resume
+      disconnectedClients.delete(result.partnerId);
+      resumeSessionManager.revokeSession(result.partnerId);
+
+      // Dọn timer nếu cả hai người đều đang offline
+      const partnerTimer = reconnectTimers.get(result.partnerId);
+
+      if (partnerTimer) {
+        clearTimeout(partnerTimer);
+        reconnectTimers.delete(result.partnerId);
+      }
+
+      const partner = clients.get(result.partnerId);
+
+      if (partner) {
+        partner.state = 'CONNECTED';
+      }
+
+      notifyRoomLeft(
+        clientId,
+        result.partnerId,
+        'Đối phương mất kết nối quá 30 giây.'
+      );
+    }
+  }, ROOM_RECONNECT_TIMEOUT);
+
+  reconnectTimers.set(clientId, timer);
+
+  return true;
+}
+
 
 /**
  * Xử lý khi client ngắt kết nối (close hoặc error).
  * @param {string} clientId
  */
-function handleDisconnect(clientId) {
+function handleDisconnect(clientId, disconnectedWs = null) {
   const client = clients.get(clientId);
   if (!client) return;
+
+  // Không cho WebSocket cũ xóa phiên đã được khôi phục
+  if (disconnectedWs && client.ws !== disconnectedWs) {
+    return;
+  }
 
   // Xóa client ngay lập tức để tránh xử lý trùng lặp do event close + error
   clients.delete(clientId);
@@ -1870,15 +2274,40 @@ function handleDisconnect(clientId) {
   // Nếu đang ở trong hàng đợi → xóa
   matchmaker.dequeue(clientId);
 
-  // Nếu đang trong phòng chat → thông báo đối phương
-  const result = roomManager.removeClient(clientId);
-  if (result && result.partnerId) {
-    notifyRoomLeft(clientId, result.partnerId);
-    const partner = clients.get(result.partnerId);
-    if (partner) {
-      partner.state = 'CONNECTED';
+
+  // Nếu đang chat với người thật thì giữ phòng 30 giây
+  const roomId = roomManager.getRoomId(clientId);
+
+  const shouldHoldRoom =
+    roomId &&
+    client.state === 'CHATTING' &&
+    !roomManager.isBotRoom(clientId);
+
+  if (shouldHoldRoom) {
+    // Giữ thông tin client cũ để khôi phục sau này
+    disconnectedClients.set(clientId, client);
+
+    if (!holdRoomForReconnect(clientId)) {
+      disconnectedClients.delete(clientId);
+    }
+  } else {
+    // Phòng Lumi hoặc trường hợp khác: dọn như cũ
+    // Hủy token của người đã hết thời hạn
+    resumeSessionManager.revokeSession(clientId);
+
+    const result = roomManager.removeClient(clientId);
+
+    if (result && result.partnerId) {
+      notifyRoomLeft(clientId, result.partnerId);
+
+      const partner = clients.get(result.partnerId);
+
+      if (partner) {
+        partner.state = 'CONNECTED';
+      }
     }
   }
+
 
   // Dọn dẹp moderation
   moderation.clearClient(clientId);
@@ -1909,7 +2338,7 @@ const heartbeatTimer = setInterval(() => {
     if (!client.isAlive) {
       console.log(`[Heartbeat] Terminated: ${client.nickname || clientId} (no pong)`);
       client.ws.terminate();
-      handleDisconnect(clientId);
+      handleDisconnect(clientId, client.ws);
       continue;
     }
 

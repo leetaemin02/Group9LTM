@@ -62,6 +62,7 @@ const CLIENT_TYPES = Object.freeze({
   LEAVE_ROOM: 'leave_room', // rời phòng
   VOICE: 'voice',           // G?i tin nh?n tho?i { voiceId, duration, url }
   MEME: 'meme',             // G?i meme sticker { memeId, url, title }
+  RESUME_SESSION: 'resume_session',
 });
 
 /** Message type Server → Client */
@@ -231,6 +232,27 @@ function validatePayload(type, payload) {
         },
       };
     }
+
+    //Tiep tuc phong neu bi rot mang
+    case CLIENT_TYPES.RESUME_SESSION: {
+      if (
+        typeof payload?.token !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(payload.token)
+      ) {
+        return {
+          ok: false,
+          error: 'Resume Token không hợp lệ'
+        };
+      }
+
+      return {
+        ok: true,
+        sanitized: {
+          token: payload.token
+        }
+      };
+    }
+
 
     //rời phòng
     case CLIENT_TYPES.LEAVE_ROOM:
