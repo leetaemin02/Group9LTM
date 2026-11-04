@@ -1,6 +1,14 @@
 # Dependencies
 node_modules/
 
+# AI Agent & Skills
+.agents/
+AGENTS.md
+
+# Docs
+docs/
+
+
 # Biến môi trường / secrets (chỉ commit .env.example và .env.docker.example)
 .env
 .env.*

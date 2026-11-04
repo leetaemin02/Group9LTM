@@ -60,6 +60,8 @@ const CLIENT_TYPES = Object.freeze({
   GAME_RESET: 'game_reset',  // Chơi lại ván mới
   GAME_QUIT: 'game_quit',   // Đóng bàn cờ
   LEAVE_ROOM: 'leave_room', // rời phòng
+  VOICE: 'voice',           // G?i tin nh?n tho?i { voiceId, duration, url }
+  MEME: 'meme',             // G?i meme sticker { memeId, url, title }
 });
 
 /** Message type Server → Client */
@@ -69,6 +71,8 @@ const SERVER_TYPES = Object.freeze({
   SOLO_HINT: 'solo_hint',     // Gợi ý tâm sự/chơi game cùng Lumi khi chờ lâu
   MATCH_FOUND: 'match_found',   // Ghép cặp thành công
   MESSAGE: 'message',       // Tin nhắn từ đối phương
+  VOICE: 'voice',           // G?i tin nh?n tho?i { voiceId, duration, url }
+  MEME: 'meme',             // G?i meme sticker { memeId, url, title }
   ATTACHMENT_UPLOAD: 'attachment_upload', // Ticket tạm thời để tải tệp lên
   ATTACHMENT: 'attachment',    // Tệp được chia sẻ trong phòng chat
   ATTACHMENT_SENT: 'attachment_sent', // Xác nhận đã chia sẻ tệp
@@ -272,6 +276,46 @@ function validatePayload(type, payload) {
       return { ok: true, sanitized: { isTyping: payload.isTyping } };
     }
 
+    // ── voice ─────────────────────────────────────────────
+    case CLIENT_TYPES.VOICE: {
+      if (typeof payload.voiceId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.voiceId)) {
+        return { ok: false, error: 'voiceId không hợp lệ' };
+      }
+      if (typeof payload.url !== 'string' || !payload.url.startsWith('/api/voice/')) {
+        return { ok: false, error: 'url voice không hợp lệ' };
+      }
+      if (typeof payload.duration !== 'number' || payload.duration <= 0 || payload.duration > 120) {
+        return { ok: false, error: 'duration không hợp lệ (tối đa 120 giây)' };
+      }
+      return {
+        ok: true,
+        sanitized: {
+          voiceId: payload.voiceId,
+          url: payload.url,
+          duration: Math.round(payload.duration * 10) / 10,
+        },
+      };
+    }
+
+    // ── meme & sticker ────────────────────────────────────
+    case CLIENT_TYPES.MEME: {
+      if (typeof payload.url !== 'string' || payload.url.length === 0 || payload.url.length > 500) {
+        return { ok: false, error: 'url meme không hợp lệ' };
+      }
+      const title = typeof payload.title === 'string' ? payload.title.slice(0, 100) : 'Meme';
+      const memeId = typeof payload.memeId === 'string' ? payload.memeId.slice(0, 50) : '';
+      const isSticker = Boolean(payload.isSticker);
+      return {
+        ok: true,
+        sanitized: {
+          url: payload.url,
+          title: escapeHtml(title),
+          memeId: escapeHtml(memeId),
+          isSticker,
+        },
+      };
+    }
+
     // ── report ───────────────────────────────────────────
     case CLIENT_TYPES.REPORT: {
       if (typeof payload.reason !== 'string' || payload.reason.trim().length === 0) {
@@ -352,6 +396,14 @@ const serverMsg = {
 
   message(text, timestamp, linkSafety = null) {
     return createMessage(SERVER_TYPES.MESSAGE, { text, timestamp, linkSafety });
+  },
+
+  voice(voiceData, timestamp = new Date().toISOString()) {
+    return createMessage(SERVER_TYPES.VOICE, { ...voiceData, timestamp });
+  },
+
+  meme(memeData, timestamp = new Date().toISOString()) {
+    return createMessage(SERVER_TYPES.MEME, { ...memeData, timestamp });
   },
 
   attachmentUpload(uploadTicket) {

@@ -80,6 +80,8 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
 };
 
 // ─── HTTP Server (phục vụ file tĩnh) ──────────────────────────────────────
@@ -190,11 +192,102 @@ async function handleAttachmentUploadRequest(req, res, uploadId) {
     });
 }
 
+// ─── Voice Recording Storage (In-Memory với TTL & Dung lượng tối đa) ──────────
+const voiceStorage = new Map();
+const MAX_VOICE_STORAGE_ITEMS = 500;
+const VOICE_TTL_MS = 60 * 60 * 1000; // 1 giờ
+const MAX_VOICE_BYTES = 3 * 1024 * 1024; // 3MB tối đa cho 1 đoạn ghi âm
+
+function pruneVoiceStorage() {
+  const now = Date.now();
+  for (const [id, item] of voiceStorage.entries()) {
+    if (now - item.createdAt > VOICE_TTL_MS) {
+      voiceStorage.delete(id);
+    }
+  }
+  while (voiceStorage.size > MAX_VOICE_STORAGE_ITEMS) {
+    const oldestKey = voiceStorage.keys().next().value;
+    voiceStorage.delete(oldestKey);
+  }
+}
+
+function handleVoiceUploadRequest(req, res) {
+  let bodyLength = 0;
+  const chunks = [];
+  const contentType = req.headers['content-type'] || 'audio/webm';
+
+  req.on('data', (chunk) => {
+    bodyLength += chunk.length;
+    if (bodyLength > MAX_VOICE_BYTES) {
+      req.destroy();
+      writeJsonResponse(res, 413, { error: 'Tệp ghi âm vượt quá giới hạn 3MB.' });
+    } else {
+      chunks.push(chunk);
+    }
+  });
+
+  req.on('end', () => {
+    if (res.writableEnded) return;
+    if (bodyLength === 0) {
+      writeJsonResponse(res, 400, { error: 'Dữ liệu âm thanh trống.' });
+      return;
+    }
+    pruneVoiceStorage();
+    const voiceId = crypto.randomUUID();
+    const buffer = Buffer.concat(chunks);
+    voiceStorage.set(voiceId, {
+      buffer,
+      mimeType: contentType.split(';')[0].trim() || 'audio/webm',
+      createdAt: Date.now(),
+      size: buffer.length,
+    });
+    writeJsonResponse(res, 201, {
+      ok: true,
+      voiceId,
+      url: `/api/voice/${voiceId}`,
+    });
+  });
+
+  req.on('error', () => {
+    if (!res.writableEnded) {
+      writeJsonResponse(res, 500, { error: 'Lỗi tải lên âm thanh.' });
+    }
+  });
+}
+
+function handleVoiceGetRequest(req, res, voiceId) {
+  const item = voiceStorage.get(voiceId);
+  if (!item) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Không tìm thấy đoạn ghi âm này.' }));
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': item.mimeType,
+    'Content-Length': item.buffer.length,
+    'Cache-Control': 'public, max-age=3600',
+    'Accept-Ranges': 'bytes',
+  });
+  res.end(item.buffer);
+}
+
 const httpServer = http.createServer((req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   const uploadMatch = /^\/api\/attachments\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
   if (req.method === 'POST' && uploadMatch) {
     handleAttachmentUploadRequest(req, res, uploadMatch[1]);
+    return;
+  }
+
+  // Voice recording endpoints
+  const voiceUploadMatch = requestUrl.pathname === '/api/voice/upload' || requestUrl.pathname === '/api/voice';
+  if (req.method === 'POST' && voiceUploadMatch) {
+    handleVoiceUploadRequest(req, res);
+    return;
+  }
+  const voiceGetMatch = /^\/api\/voice\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
+  if (req.method === 'GET' && voiceGetMatch) {
+    handleVoiceGetRequest(req, res, voiceGetMatch[1]);
     return;
   }
 
@@ -861,6 +954,87 @@ const messageHandlers = {
     if (!partnerId) return;
 
     sendTo(partnerId, serverMsg.typing(payload.isTyping));
+  },
+
+  // ── voice ─────────────────────────────────────────────
+  [CLIENT_TYPES.VOICE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
+      return;
+    }
+    if (!moderation.checkRateLimit(clientId)) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+
+    // Nếu đang ở phòng Bạn Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const bot = roomManager.getBot(clientId);
+      if (bot) {
+        setTimeout(() => {
+          sendTo(clientId, serverMsg.message('Lumi đã nghe tin nhắn thoại của bạn rồi nè! 🎙️ Giọng bạn nghe rất ấm áp và dễ thương đó ✨', new Date().toISOString()));
+        }, 1200);
+      }
+      return;
+    }
+
+    const partnerId = roomManager.getPartnerId(clientId);
+    if (!partnerId) return;
+
+    sendTo(partnerId, serverMsg.voice({
+      voiceId: payload.voiceId,
+      url: payload.url,
+      duration: payload.duration,
+    }, timestamp));
+  },
+
+  // ── meme & sticker ────────────────────────────────────
+  [CLIENT_TYPES.MEME](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
+      return;
+    }
+    if (!moderation.checkRateLimit(clientId)) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const isSticker = Boolean(payload.isSticker);
+
+    // Nếu đang ở phòng Bạn Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const memeReplies = isSticker ? [
+        'Nhãn dán cưng xỉu luôn á! 🥰✨',
+        'Haha nhãn dán Douyin này đỉnh thật sự! 😂',
+        'U là trời, biểu cảm chuẩn không cần chỉnh 🤣',
+        'Nhãn dán siêu mặn mòi luôn bạn ơi! ✨',
+      ] : [
+        'Haha meme đỉnh chóp luôn á! 😂',
+        'U là trời, meme này chuẩn tâm trạng ghê 🤣',
+        'Meme mặn mòi quá bạn ơi! Lưu ngay vào bộ sưu tập ✨',
+        'Haha cưng xỉu luôn! 🐱✨',
+      ];
+      const reply = memeReplies[Math.floor(Math.random() * memeReplies.length)];
+      setTimeout(() => {
+        sendTo(clientId, serverMsg.message(reply, new Date().toISOString()));
+      }, 1000);
+      return;
+    }
+
+    const partnerId = roomManager.getPartnerId(clientId);
+    if (!partnerId) return;
+
+    sendTo(partnerId, serverMsg.meme({
+      url: payload.url,
+      title: payload.title,
+      memeId: payload.memeId,
+      isSticker,
+    }, timestamp));
   },
 
   // ── skip ──────────────────────────────────────────────

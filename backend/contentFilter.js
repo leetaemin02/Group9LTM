@@ -226,7 +226,7 @@ function checkContent(text) {
   const top = matches[0];
 
   return {
-    ok: top.action === MODERATION_ACTIONS.MASK,
+    ok: false,
     isViolation: true,
     matched: top.matched,
     reason: `${top.obfuscated ? 'Nghi vấn lách bộ lọc' : 'Vi phạm'}: ${top.category}`,

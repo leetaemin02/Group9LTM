@@ -413,6 +413,74 @@
 
           <!-- Cụm Soạn Thảo Nổi (Floating Composer Dock) -->
           <div class="chat-composer-dock">
+            <!-- Khay gợi ý Nhãn dán theo từ khóa -->
+            <div id="meme-suggestions-bar" class="meme-suggestions-bar hidden" aria-label="Gợi ý nhãn dán">
+              <div class="meme-suggestions-header">
+                <span class="meme-tag-badge">✨ Gợi ý nhãn dán: <b id="meme-keyword-highlight">...</b></span>
+                <button id="btn-close-meme-suggestions" type="button" class="btn-close-mini" title="Đóng gợi ý">✕</button>
+              </div>
+              <!-- Danh sách Nhãn dán gợi ý theo từ khóa (Sticker động) -->
+              <div id="meme-suggestions-list" class="meme-suggestions-list">
+                <!-- Render động các Nhãn dán theo từ khóa -->
+              </div>
+            </div>
+
+            <!-- Khay Biểu Tượng & Nhãn Dán Popover (iOS Emoji & Stickers) -->
+            <div id="emoji-picker-popover" class="emoji-picker-popover hidden" role="dialog" aria-label="Bảng biểu tượng và nhãn dán">
+              <!-- Bộ chuyển chế độ: Emoji iOS vs Nhãn dán -->
+              <div class="picker-mode-switcher" id="picker-mode-switcher">
+                <button type="button" class="picker-mode-tab active" id="tab-picker-emoji" data-mode="emoji">😃 Biểu tượng</button>
+                <button type="button" class="picker-mode-tab" id="tab-picker-stickers" data-mode="stickers">✨ Nhãn dán</button>
+                <button type="button" id="btn-close-emoji-picker" class="btn-close-mini" title="Đóng">✕</button>
+              </div>
+
+              <!-- Nội dung Chế độ Emoji iOS -->
+              <div id="picker-emoji-view" class="picker-view-panel">
+                <div class="emoji-picker-header">
+                  <input type="text" id="input-emoji-search" class="emoji-search-input" placeholder="🔍 Tìm kiếm emoji (cười, tim, khóc...)" />
+                </div>
+                <div id="emoji-grid-container" class="emoji-grid-container">
+                  <!-- Danh mục emoji iOS render động -->
+                </div>
+                <div class="emoji-category-tabs" id="emoji-category-tabs">
+                  <button type="button" class="emoji-tab-btn active" data-cat="recent" title="Thường dùng">🕒</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="smileys" title="Mặt cười">😀</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="animals" title="Động vật">🐶</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="food" title="Đồ ăn">🍔</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="activity" title="Hoạt động">⚽</button>
+                  <button type="button" class="emoji-tab-btn" data-cat="objects" title="Biểu tượng">💡</button>
+                </div>
+              </div>
+
+              <!-- Nội dung Chế độ Nhãn dán (Sticker Pack) -->
+              <div id="picker-sticker-view" class="picker-view-panel hidden">
+                <div class="sticker-pack-header">
+                  <span class="sticker-pack-title" id="sticker-current-pack-title">🟡 Douyin Classic</span>
+                </div>
+                <div id="sticker-grid-container" class="sticker-grid-container">
+                  <!-- Nhãn dán render động -->
+                </div>
+                <div class="sticker-pack-tabs" id="sticker-pack-tabs">
+                  <button type="button" class="sticker-pack-tab-btn active" data-pack="douyin" title="Douyin Classic">
+                    <img src="/assets/stickers/douyin/weixiao.png" alt="Douyin" class="sticker-tab-icon" />
+                    <span>Douyin</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="cats" title="Mèo Viral">
+                    <span class="sticker-tab-emoji">🐱</span>
+                    <span>Mèo</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="pandas" title="Gấu Trúc Douyin">
+                    <span class="sticker-tab-emoji">🐼</span>
+                    <span>Gấu Trúc</span>
+                  </button>
+                  <button type="button" class="sticker-pack-tab-btn" data-pack="pepe" title="Pepe & Động Vật">
+                    <span class="sticker-tab-emoji">🐸</span>
+                    <span>Pepe</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div class="quick-emoji-bar">
               <span class="quick-emoji-hint">Cảm xúc:</span>
               <div class="quick-emoji-list" id="quick-emoji-list">
@@ -430,12 +498,38 @@
             <div class="chat-input-area">
               <input type="file" id="input-attachment" class="visually-hidden"
                 accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation" />
-              <button id="btn-attachment" class="btn btn-secondary btn-attachment" type="button"
+
+              <!-- Nút Mở Emoji iPhone -->
+              <button id="btn-emoji-toggle" class="btn btn-secondary btn-icon-round composer-tool-btn" type="button"
+                title="Chọn biểu tượng iPhone Emoji" aria-label="iPhone Emoji">
+                <span class="composer-icon">😀</span>
+              </button>
+
+              <!-- Nút Mở Nhãn Dán (Sticker Pack) -->
+              <button id="btn-sticker-toggle" class="btn btn-secondary btn-icon-round composer-tool-btn" type="button"
+                title="Chọn nhãn dán động" aria-label="Nhãn dán">
+                <span class="composer-icon">✨</span>
+              </button>
+
+              <!-- Nút Gửi File / Ảnh -->
+              <button id="btn-attachment" class="btn btn-secondary btn-attachment composer-tool-btn" type="button"
                 title="Gửi ảnh hoặc file" aria-label="Gửi file" aria-describedby="attachment-disclaimer">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                   stroke-linejoin="round" aria-hidden="true">
                   <path
                     d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.9-9.9a4 4 0 0 1 5.66 5.66l-9.9 9.9a2 2 0 0 1-2.83-2.83l9.2-9.19" />
+                </svg>
+              </button>
+
+              <!-- Nút Ghi Âm Voice (Bấm một lần để bật hoặc Giữ để nói) -->
+              <button id="btn-voice" class="btn btn-secondary btn-voice composer-tool-btn" type="button"
+                title="Bấm hoặc giữ để gửi tin nhắn thoại (Voice)" aria-label="Ghi âm giọng nói">
+                <svg class="mic-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
                 </svg>
               </button>
 
@@ -455,6 +549,38 @@
                   <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
               </button>
+
+              <!-- Thanh Ghi Âm Trực Tiếp (Voice Recording Live Bar) -->
+              <div id="voice-recording-bar" class="voice-recording-bar hidden" role="region" aria-label="Đang ghi âm">
+                <div class="voice-rec-left">
+                  <span class="voice-rec-pulse" aria-hidden="true"></span>
+                  <span id="voice-rec-timer" class="voice-rec-timer">00:00</span>
+                  <div class="voice-wave-visualizer" id="voice-wave-visualizer" aria-hidden="true">
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                  </div>
+                  <span class="voice-rec-hint" id="voice-rec-hint">Đang ghi âm…</span>
+                </div>
+                <div class="voice-rec-actions">
+                  <button id="btn-voice-cancel" type="button" class="btn btn-voice-action btn-voice-cancel" title="Hủy bỏ ghi âm">
+                    <span class="btn-voice-icon">✕</span>
+                    <span class="btn-voice-lbl">Hủy</span>
+                  </button>
+                  <button id="btn-voice-send" type="button" class="btn btn-voice-action btn-voice-send" title="Dừng &amp; Gửi tin nhắn thoại">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                    <span class="btn-voice-lbl">Gửi</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div id="attachment-status" class="attachment-status hidden" role="status" aria-live="polite"></div>
