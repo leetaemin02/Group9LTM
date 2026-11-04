@@ -38,7 +38,8 @@ ChatMatch/
 │   └── script.js         # Frontend logic và WebSocket client
 ├── backend/
 │   ├── server.js         # HTTP server, phục vụ frontend và WebSocket
-│   ├── companionBot.js   # Trợ lý Lumi
+│   ├── companionBot.js   # Trợ lý Lumi (chat & cờ Caro solo)
+│   ├── groqChat.js       # Hội thoại Lumi qua Groq API (tùy chọn, model cascading)
 │   ├── matchmaker.js     # Hàng đợi, mood matching & anti-targeted pairing
 │   ├── roomManager.js    # Quản lý phòng chat 1-1 & Minigame Caro
 │   ├── contentFilter.js  # Bộ lọc ngôn ngữ không phù hợp và nội dung nhạy cảm
@@ -268,7 +269,7 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
   - **Giải quyết bài toán "Chỉ có 1 người dùng trực tuyến / Phòng vắng":** Người dùng không bao giờ bị đẩy ra ngoài hay phải chờ đợi đơn độc trong chán nản.
   - **Tâm sự & Giải tỏa cảm xúc:** Lắng nghe, thấu cảm, động viên ấm áp theo tâm trạng (`tam_su`, `chan_nan`, `vui_ve`, `hoc_tap`, `tim_ban_game`), chia sẻ bài tập hít thở thư giãn 4-7-8, xả stress.
   - **Minigame Caro 10x10/15x15/20x20 với Lumi:** Bàn cờ nhỏ nhất là 10x10; người chơi có thể chọn thêm bàn 15x15 hoặc 20x20. Nối 5 quân liên tiếp để thắng. Bot tính nước đi bằng chiến thuật cục bộ, ưu tiên thắng, chặn đối thủ và phát triển chuỗi quân.
-  - **Trò chuyện Lumi không cần API key:** Lumi không gọi dịch vụ AI bên ngoài. Bot dò từ khóa bằng các mẫu biểu thức chính quy, chọn ngẫu nhiên câu trả lời soạn sẵn tương ứng; nếu không khớp mẫu thì dùng câu phản hồi đồng cảm mặc định. Nội dung được xử lý trực tiếp trong ứng dụng.
+  - **Trò chuyện Lumi linh hoạt (Groq API tùy chọn + Offline fallback):** Mặc định khi chưa cấu hình `GROQ_API_KEY`, Lumi chạy offline bằng kịch bản từ khóa mà không gọi dịch vụ bên ngoài. Khi cấu hình `GROQ_API_KEY`, Lumi trò chuyện tự nhiên qua Groq với định tuyến model thông minh (câu ngắn/tán gẫu dùng `llama-3.1-8b-instant`, câu dài/tâm sự sâu dùng `llama-3.3-70b-versatile`), bộ nhớ ngữ cảnh ngắn, chống prompt injection nhiều lớp và tự quay về kịch bản offline nếu mất mạng hoặc hết hạn mức.
   - **Hiệu ứng Typing mượt mà:** Bot mô phỏng độ trễ gõ phím chân thực (0.8s - 1.8s) như một người bạn thật sự.
   - **Chuyển đổi linh hoạt:** Khi người dùng muốn tìm người thật, chỉ cần bấm nút "👥 Tìm người thật" là được đưa ngay về hàng đợi `Matchmaker`.
 - ✅ **WebSocket thuần (`ws`)** – Tuân thủ chuẩn RFC 6455, hiệu năng cao, không phụ thuộc socket.io.

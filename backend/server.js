@@ -16,6 +16,12 @@ require('dotenv').config();
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+
+// Tự động nạp file .env nếu có (Node.js 20+ native, không cài package ngoài)
+if (typeof process.loadEnvFile === 'function') {
+  try { process.loadEnvFile(); } catch (_) {}
+  try { process.loadEnvFile(path.join(__dirname, '.env')); } catch (_) {}
+}
 const { WebSocketServer } = require('ws');
 const { v4: uuidv4 } = require('uuid');
 
@@ -1275,6 +1281,15 @@ const messageHandlers = {
       }
     }
 
+    // Kiểm tra nếu đang ở phòng trò chuyện cùng Bạn Đồng Hành Lumi
+    if (roomManager.isBotRoom(clientId)) {
+      const bot = roomManager.getBot(clientId);
+      if (bot) {
+        // Lumi trả lời bất đồng bộ (Groq hoặc kịch bản offline), không chặn vòng lặp WebSocket
+        Promise.resolve(bot.handleUserMessage(payload.text)).catch((error) => console.error('[Server] Lỗi khi Lumi xử lý tin nhắn:', error.message));
+      }
+      return;
+    }
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
@@ -2729,5 +2744,6 @@ httpServer.listen(PORT, () => {
   console.log(`  📡 HTTP:      http://localhost:${PORT}`);
   console.log(`  🔌 WebSocket: ws://localhost:${PORT}`);
   console.log(`  💓 Heartbeat: mỗi ${HEARTBEAT_INTERVAL / 1000}s`);
+  console.log(`  🤖 Lumi AI:   ${process.env.GROQ_API_KEY ? 'Groq API (bật)' : 'kịch bản offline (chưa có GROQ_API_KEY)'}`);
   console.log('═══════════════════════════════════════════════════');
 });

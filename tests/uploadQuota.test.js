@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const RedisManager = require('../backend/redisManager');
+const RedisManager = require('../backend/redis/redisManager');
 
 async function main() {
   const redis = new RedisManager({ enabled: false });

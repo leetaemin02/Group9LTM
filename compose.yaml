@@ -4,14 +4,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
     ports:
       - "${CHATMATCH_PORT:-3001}:3001"
     environment:
       PORT: "3001"
-      USE_REDIS: "true"
+      USE_REDIS: "${USE_REDIS:-true}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       AZURE_STORAGE_ACCOUNT_NAME: "${AZURE_STORAGE_ACCOUNT_NAME:-}"
       AZURE_STORAGE_CONTAINER_NAME: "${AZURE_STORAGE_CONTAINER_NAME:-chat-attachments}"
@@ -20,6 +17,9 @@ services:
       AZURE_TENANT_ID: "${AZURE_TENANT_ID:-}"
       AZURE_CLIENT_SECRET: "${AZURE_CLIENT_SECRET:-}"
       SKIP_MALWARE_SCAN: "${SKIP_MALWARE_SCAN:-false}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GROQ_MODEL_FAST: "${GROQ_MODEL_FAST:-openai/gpt-oss-20b}"
+      GROQ_MODEL_SMART: "${GROQ_MODEL_SMART:-openai/gpt-oss-120b}"
 
   redis:
     image: redis:7-alpine
