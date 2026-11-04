@@ -30,8 +30,9 @@ const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
 const Moderation = require('./moderation');
 const RedisManager = require('./redis/redisManager');
+const caroStore = require('./redis/caroStore');
 const ResumeSessionManager = require('./redis/resumeSession');
-const {addViolation, getBanRemaining, instantBan} = require('./redis/violationStore')
+const { addViolation, getBanRemaining, instantBan } = require('./redis/violationStore')
 
 const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
 const { analyzeLinkSafety } = require('./linkSafety');
@@ -408,8 +409,8 @@ const redisManager = new RedisManager({
       client.ws.send(msgString);
     }
   },
-  onMatchEvent: ({ entry1, entry2, commonInterests }) => {
-    handleMatchFound(entry1, entry2, commonInterests);
+  onMatchEvent: ({ roomId, entry1, entry2, commonInterests }) => {
+    handleMatchFound(entry1, entry2, commonInterests, roomId);
   },
   onRoomLeft: (event) => {
     handleRemoteRoomLeft(event);
@@ -477,6 +478,11 @@ function handleRemoteRoomLeft({ clientId, partnerId, reason, sourceInstanceId })
   const localPartner = clients.get(partnerId);
   if (!localPartner) return;
 
+  const roomId = roomManager.getRoomId(partnerId);
+
+  cleanupCaroGame(roomId);
+  cleanupResumeSession(partnerId);
+
   roomManager.removeClient(partnerId);
   localPartner.state = 'CONNECTED';
   sendTo(partnerId, serverMsg.partnerLeft(reason));
@@ -500,7 +506,7 @@ function notifyRoomLeft(clientId, partnerId, reason = null) {
 
 // ─── Xử lý ghép cặp thành công ────────────────────────────────────────────
 
-function handleMatchFound(entry1, entry2, commonInterests) {
+function handleMatchFound(entry1, entry2, commonInterests, sharedRoomId = null) {
   const client1 = clients.get(entry1.clientId);
   const client2 = clients.get(entry2.clientId);
 
@@ -521,7 +527,13 @@ function handleMatchFound(entry1, entry2, commonInterests) {
   }
 
   // Tạo phòng chat
-  const roomId = roomManager.createRoom(entry1.clientId, entry2.clientId);
+  const roomId = roomManager.createRoom(
+    entry1.clientId,
+    entry2.clientId,
+    false,
+    null,
+    sharedRoomId
+  );
 
   // Cấp Resume Token riêng cho từng người trong phòng
   const token1 = client1
@@ -560,6 +572,14 @@ function handleMatchFound(entry1, entry2, commonInterests) {
 
   acknowledgeLocalMatches(client1, client2);
   console.log(`[Server] Chat started: ${entry1.nickname} (${entry1.mood}) ↔ ${entry2.nickname} (${entry2.mood}) in room ${roomId}`);
+
+  console.log('[MATCH ROOM DEBUG]', {
+    pid: process.pid,
+    roomId,
+    client1: entry1.clientId,
+    client2: entry2.clientId
+  });
+
 }
 
 function acknowledgeLocalMatches(client1, client2) {
@@ -822,6 +842,50 @@ async function handleResumeSession(temporaryId, payload) {
       return;
     }
 
+    // Đồng bộ trạng thái Caro mới nhất trước khi khôi phục phiên
+    let resumeGame = room.game ?? null;
+
+    if (redisManager.enabled) {
+      try {
+        resumeGame = await caroStore.getGame(redisManager, roomId);
+
+        console.log('[CARO RESUME SYNC]', {
+          pid: process.pid,
+          roomId,
+          gameExists: !!resumeGame,
+          turn: resumeGame?.turn ?? null
+        });
+      } catch (error) {
+        console.error('[CARO RESUME ERROR]', error.message);
+
+        rejectResume(
+          'Không thể đồng bộ ván Caro. Vui lòng thử kết nối lại.'
+        );
+        return;
+      }
+    }
+
+    // Kiểm tra lại phiên sau khi chờ Redis
+    if (
+      clients.get(temporaryId) !== temporaryClient ||
+      temporaryClient.ws !== ws ||
+      ws.readyState !== 1 ||
+      clients.has(oldId) ||
+      disconnectedClients.get(oldId) !== oldClient ||
+      roomManager.getRoomId(oldId) !== roomId ||
+      roomManager.getRoom(roomId) !== room ||
+      !roomManager.isDisconnected(oldId) ||
+      !resumeSessionManager.validateResumeToken(payload.token)
+    ) {
+      rejectResume('Phiên khôi phục đã hết hạn hoặc thay đổi.');
+      return;
+    }
+
+    // Chỉ cập nhật RAM sau khi xác nhận phiên còn hợp lệ
+    if (redisManager.enabled) {
+      room.game = resumeGame;
+    }
+
     // 6. Gắn WebSocket mới vào clientId cũ
     clients.delete(temporaryId);
 
@@ -865,7 +929,7 @@ async function handleResumeSession(temporaryId, payload) {
         partnerDisconnected: partnerId
           ? roomManager.isDisconnected(partnerId)
           : false,
-        game: room.game
+        game: resumeGame
       }
     }));
 
@@ -933,7 +997,7 @@ const messageHandlers = {
 
     // kiem tra ban redis
     if (!(await ensureNotRedisBanned(clientId))) {
-    return;
+      return;
     }
 
     // Trong khi chờ Redis, kết nối có thể đã ngắt
@@ -1037,7 +1101,7 @@ const messageHandlers = {
       return;
     }
 
-    
+
     // Xử lý riêng cho phòng Lumi
     if (roomManager.isBotRoom(clientId)) {
       const filterResult = checkContent(payload.text);
@@ -1083,7 +1147,7 @@ const messageHandlers = {
         return; // Dừng lại, không gửi cho đối phương
       }
       // ════════ TẦNG 3: Xúc phạm danh dự / Gạ tình 18+ -> Cảnh cáo 3 lần mới ban ════════
-      
+
       else if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
 
         // Bước 1: Ghi nhận vi phạm trong Redis
@@ -1422,7 +1486,7 @@ const messageHandlers = {
       return;
     }
 
-    
+
     // Kiểm tra ban khi gửi voice cho người thật
     if (!roomManager.isBotRoom(clientId)) {
       const partnerBeforeCheck =
@@ -1557,13 +1621,13 @@ const messageHandlers = {
 
     // Sau khi chờ Redis, kiểm tra lại trạng thái
 
-  if (
-    clients.get(clientId) !== client ||
-    client.state !== 'CHATTING' ||
-    roomManager.getRoomId(clientId) !== roomBeforeCheck
-  ) {
-    return;
-  }
+    if (
+      clients.get(clientId) !== client ||
+      client.state !== 'CHATTING' ||
+      roomManager.getRoomId(clientId) !== roomBeforeCheck
+    ) {
+      return;
+    }
 
 
     // Nếu đang ở phòng Bot Đồng Hành -> chuyển sang hàng đợi tìm người thật
@@ -1650,19 +1714,19 @@ const messageHandlers = {
     // Xóa phòng chat
     const result = roomManager.removeClient(clientId);
 
-  if (result && result.partnerId) {
-    notifyRoomLeft(
-      clientId,
-      result.partnerId,
-      'Đối phương đã rời khỏi phòng chat.'
-    );
+    if (result && result.partnerId) {
+      notifyRoomLeft(
+        clientId,
+        result.partnerId,
+        'Đối phương đã rời khỏi phòng chat.'
+      );
 
-    const partner = clients.get(result.partnerId);
+      const partner = clients.get(result.partnerId);
 
-    if (partner) {
-      partner.state = 'CONNECTED';
+      if (partner) {
+        partner.state = 'CONNECTED';
+      }
     }
-  }
 
     client.state = 'CONNECTED';
     console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) đã về trang chủ`);
@@ -1746,7 +1810,7 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
-    
+
     // Chỉ kiểm tra Redis Ban khi chat với người thật
     if (!roomManager.isBotRoom(clientId)) {
       const partnerBeforeCheck =
@@ -1850,14 +1914,74 @@ const messageHandlers = {
     if (!roomId || !partnerId) return;
 
     const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
-    const game = roomManager.initGame(roomId, partnerId, clientId, requestedSize);
-    const msg = serverMsg.gameState({
-      action: 'start',
-      game,
-    });
 
-    sendTo(clientId, msg);
-    sendTo(partnerId, msg);
+      // ✅ THÊM LOG NGAY TẠI ĐÂY
+  console.log('[CARO ACCEPT]', {
+    pid: process.pid,
+    roomId,
+    clientId,
+    gameExists: !!roomManager.getRoom(roomId)?.game
+  });
+
+    let game;
+
+    try {
+      if (redisManager.enabled) {
+        // Tạo game chung trong Redis
+        game = await caroStore.createGame(
+          redisManager,
+          roomId,
+          partnerId, // Người mời: X
+          clientId,  // Người chấp nhận: O
+          requestedSize
+        );
+
+        // Giữ trạng thái local cho các chức năng hiện có
+        const room = roomManager.getRoom(roomId);
+        if (room) {
+          room.game = game;
+        }
+
+        console.log('[CARO REDIS CREATE]', {
+          pid: process.pid,
+          roomId,
+          created: true,
+          turn: game.turn
+        });
+
+      } else {
+        // Không dùng Redis: giữ nguyên logic cũ
+        game = roomManager.initGame(
+          roomId,
+          partnerId,
+          clientId,
+          requestedSize
+        );
+      }
+
+      if (!game) {
+        throw new Error('Không thể khởi tạo ván Caro');
+      }
+
+      const msg = serverMsg.gameState({
+        action: 'start',
+        game
+      });
+
+      sendTo(clientId, msg);
+      sendTo(partnerId, msg);
+
+    } catch (error) {
+      console.error('[CARO CREATE ERROR]', error.message);
+
+      sendTo(
+        clientId,
+        serverMsg.error(
+          'GAME_CREATE_FAILED',
+          'Không thể bắt đầu ván Caro. Vui lòng thử lại.'
+        )
+      );
+    }
   },
 
   // ── game_move (nước đi minigame) ──────────────────────
@@ -1920,10 +2044,41 @@ const messageHandlers = {
       return;
     }
 
+    console.log('[CARO MOVE]', {
+  pid: process.pid,
+  roomId,
+  clientId,
+  gameExists: !!roomManager.getRoom(roomId)?.game
+});
+
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
-    const result = roomManager.makeGameMove(roomId, clientId, payload.index);
+    let result;
+
+    if (redisManager.enabled) {
+      result = await caroStore.makeMove(
+        redisManager,
+        roomId,
+        clientId,
+        payload.index
+      );
+
+      console.log('[CARO REDIS MOVE]', {
+        pid: process.pid,
+        roomId,
+        clientId,
+        index: payload.index,
+        success: result.ok,
+        nextTurn: result.game?.turn
+      });
+    } else {
+      result = roomManager.makeGameMove(
+        roomId,
+        clientId,
+        payload.index
+      );
+    }
     if (!result.ok) {
       sendTo(clientId, serverMsg.error('GAME_INVALID_MOVE', result.error));
       return;
@@ -1963,16 +2118,70 @@ const messageHandlers = {
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
-    const game = roomManager.resetGame(roomId, requestedSize);
-    if (!game) return;
+    let game;
 
-    const msg = serverMsg.gameState({
-      action: 'start',
-      game,
-    });
+    try {
+      if (redisManager.enabled) {
+        const result = await caroStore.resetGame(
+          redisManager,
+          roomId,
+          requestedSize
+        );
 
-    sendTo(clientId, msg);
-    sendTo(partnerId, msg);
+        if (!result.ok) {
+          sendTo(
+            clientId,
+            serverMsg.error('GAME_RESET_FAILED', result.error)
+          );
+          return;
+        }
+
+        game = result.game;
+
+        // Cập nhật bản local để hỗ trợ các chức năng hiện tại
+        const room = roomManager.getRoom(roomId);
+        if (room) {
+          room.game = game;
+        }
+      } else {
+        game = roomManager.resetGame(roomId, requestedSize);
+      }
+
+      if (!game) return;
+
+      // Không gửi sự kiện vào phòng mới nếu client đã rời phòng
+      if (
+        roomManager.getRoomId(clientId) !== roomId ||
+        roomManager.getPartnerId(clientId) !== partnerId
+      ) {
+        return;
+      }
+
+      const msg = serverMsg.gameState({
+        action: 'start',
+        game
+      });
+
+      sendTo(clientId, msg);
+      sendTo(partnerId, msg);
+
+      console.log('[CARO RESET]', {
+        pid: process.pid,
+        roomId,
+        nextTurn: game.turn
+      });
+
+    } catch (error) {
+      console.error('[CARO RESET ERROR]', error.message);
+
+      sendTo(
+        clientId,
+        serverMsg.error(
+          'GAME_RESET_FAILED',
+          'Không thể tạo ván mới. Vui lòng thử lại.'
+        )
+      );
+    }
   },
 
   // ── game_quit (thoát minigame) ────────────────────────
@@ -1997,11 +2206,44 @@ const messageHandlers = {
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
-    roomManager.quitGame(roomId);
-    sendTo(partnerId, serverMsg.gameState({
-      action: 'quit',
-      quitterName: client.nickname,
-    }));
+    try {
+      if (redisManager.enabled) {
+        // Xóa bàn cờ trên Redis trước khi thông báo
+        await caroStore.quitGame(redisManager, roomId);
+      }
+
+      // Dọn bản local
+      roomManager.quitGame(roomId);
+
+      if (
+        roomManager.getRoomId(clientId) !== roomId ||
+        roomManager.getPartnerId(clientId) !== partnerId
+      ) {
+        return;
+      }
+
+      sendTo(partnerId, serverMsg.gameState({
+        action: 'quit',
+        quitterName: client.nickname
+      }));
+
+      console.log('[CARO QUIT]', {
+        pid: process.pid,
+        roomId,
+        clientId
+      });
+
+    } catch (error) {
+      console.error('[CARO QUIT ERROR]', error.message);
+
+      sendTo(
+        clientId,
+        serverMsg.error(
+          'GAME_QUIT_FAILED',
+          'Không thể thoát ván cờ lúc này.'
+        )
+      );
+    }
   },
 };
 
@@ -2113,7 +2355,7 @@ wss.on('connection', (ws, req) => {
     // 3. Dispatch đến handler tương ứng
     const handler = messageHandlers[type];
     if (handler) {
-      
+
       // Các hành động Caro cần xử lý theo thứ tự của từng client
       const gameActions = new Set([
         CLIENT_TYPES.GAME_INVITE,
@@ -2202,6 +2444,18 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+function cleanupCaroGame(roomId) {
+  if (!roomId || !redisManager.enabled) return;
+
+  caroStore.quitGame(redisManager, roomId)
+    .catch((error) => {
+      console.error(
+        `[CARO CLEANUP ERROR] room=${roomId}:`,
+        error.message
+      );
+    });
+}
+
 function cleanupResumeSession(clientId) {
   if (!clientId) return;
 
@@ -2275,6 +2529,9 @@ function holdRoomForReconnect(clientId) {
 
     // Thu hồi token và thông tin phiên đã hết hạn
     cleanupResumeSession(clientId);
+
+    // Phòng thực sự hết thời gian khôi phục
+    cleanupCaroGame(roomId);
 
     const result = roomManager.removeClient(clientId);
 
@@ -2431,7 +2688,7 @@ const matchRecoveryTimer = setInterval(() => {
   redisManager.getPendingMatches(waitingClientIds)
     .then((pendingMatches) => {
       for (const { match } of pendingMatches) {
-        handleMatchFound(match.entry1, match.entry2, match.commonInterests);
+        handleMatchFound(match.entry1, match.entry2, match.commonInterests, match.roomId);
       }
     })
     .catch((error) => {

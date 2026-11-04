@@ -92,7 +92,9 @@ local function choose(source, sourceTimedOut)
   end
 
   local partnerId = selected.entry.clientId
+  local roomId = 'match-' .. tostring(redis.call('INCR', sequenceKey))
   local matchEvent = cjson.encode({
+    roomId = roomId,
     entry1 = {
       clientId = source.clientId,
       nickname = source.nickname,
