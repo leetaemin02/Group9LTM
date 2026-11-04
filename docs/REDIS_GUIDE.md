@@ -81,6 +81,16 @@ sudo systemctl restart redis-server
 
 ## 4. Kích hoạt Redis trong mã nguồn ChatMatch
 
+### Docker Compose
+
+`docker compose up --build` khởi chạy cả `chatmatch` và Redis 7. Redis chỉ truy cập trong network nội bộ Compose; AOF bật và dữ liệu được giữ trong volume `redis_data`. `USE_REDIS=true` là bắt buộc cho quota upload; nếu Redis không sẵn sàng, backend từ chối upload thay vì bỏ qua quota.
+
+### Render
+
+Render triển khai Docker Web Service và Key Value tương thích Redis thành hai service riêng theo file `render.yaml` ở thư mục gốc. Tên service là `group9ltm` (hostname Render viết thường); `REDIS_URL` được nối từ internal connection string của Key Value. Chọn cùng một region cho cả hai service. Web Service deploy tự động khi có commit mới vào `main`; frontend kết nối WebSocket qua `wss://` trên cùng domain HTTPS của Render. Không cần Cloudflare.
+
+Render Free Web Service ngủ sau 15 phút không có lưu lượng và lần khởi động lại có thể mất khoảng một phút. Render Free Key Value không lưu dữ liệu bền vững xuống đĩa; restart/bảo trì có thể xóa hàng đợi ghép cặp và bộ đếm upload trọn đời. Vì vậy giới hạn 500 MB chỉ là best-effort trên gói miễn phí, không phải trần hóa đơn cứng. Muốn website luôn hoạt động và quota nghiêm ngặt cần Web Service không sleep cùng Redis có persistence hoặc database bền vững. Free Web Service chỉ chạy một instance; giữ một instance cũng phù hợp với trạng thái phòng/game còn lưu trong RAM của ứng dụng.
+
 ### 4.1. Cấu hình biến môi trường
 
 Ứng dụng đọc cấu hình từ environment variables của tiến trình Node.js. `.env.example` chỉ là mẫu; ứng dụng hiện không tự nạp file `.env`. Trên PowerShell, chạy:

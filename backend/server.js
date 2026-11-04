@@ -51,6 +51,9 @@ const MAX_CONCURRENT_ATTACHMENT_UPLOADS = Number.isSafeInteger(configuredMaxConc
   && configuredMaxConcurrentAttachmentUploads > 0
   ? configuredMaxConcurrentAttachmentUploads
   : 4;
+const MAX_LIFETIME_UPLOAD_BYTES = 500_000_000;
+const MAX_CONVERSATION_UPLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_CONVERSATION_UPLOAD_FILES = 5;
 let activeAttachmentUploads = 0;
 if (!attachmentStorage.enabled) {
   console.info('[Attachments] Disabled; configure Azure Storage to enable file sharing.');
@@ -91,7 +94,7 @@ function writeJsonResponse(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function handleAttachmentUploadRequest(req, res, uploadId) {
+async function handleAttachmentUploadRequest(req, res, uploadId) {
   const authorization = req.headers.authorization || '';
   const match = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/u.exec(authorization);
   if (!match) {
@@ -100,8 +103,9 @@ function handleAttachmentUploadRequest(req, res, uploadId) {
     return;
   }
 
+  let claims;
   try {
-    attachmentStorage.validateTicket(match[1], uploadId);
+    claims = attachmentStorage.validateTicket(match[1], uploadId);
   } catch (error) {
     req.resume();
     const statusCode = error instanceof AttachmentError ? error.statusCode : 500;
@@ -110,9 +114,59 @@ function handleAttachmentUploadRequest(req, res, uploadId) {
     });
     return;
   }
+  const declaredLength = Number(req.headers['content-length']);
+  if (!Number.isSafeInteger(declaredLength) || declaredLength !== claims.size) {
+    req.resume();
+    writeJsonResponse(res, 400, { error: 'Kích thước tải lên không khớp với ticket.' });
+    return;
+  }
   if (activeAttachmentUploads >= MAX_CONCURRENT_ATTACHMENT_UPLOADS) {
     req.resume();
     writeJsonResponse(res, 503, { error: 'Máy chủ đang xử lý nhiều tệp. Vui lòng thử lại sau.' });
+    return;
+  }
+
+  const roomId = roomManager.getRoomId(claims.clientId);
+  if (!roomId || roomManager.getPartnerId(claims.clientId) !== claims.partnerId) {
+    req.resume();
+    writeJsonResponse(res, 409, { error: 'Phòng chat đã kết thúc; không thể tải tệp lên.' });
+    return;
+  }
+  const conversationId = [claims.clientId, claims.partnerId].sort().join(':');
+  if (claims.conversationId !== conversationId) {
+    req.resume();
+    writeJsonResponse(res, 401, { error: 'Ticket tải tệp không thuộc phòng chat này.' });
+    return;
+  }
+  if (!redisManager.enabled || !redisManager.isConnected) {
+    req.resume();
+    writeJsonResponse(res, 503, { error: 'Hệ thống hạn mức tải tệp tạm thời không khả dụng.' });
+    return;
+  }
+
+  try {
+    const quota = await redisManager.reserveAttachmentUpload({
+      uploadId,
+      conversationId,
+      size: claims.size,
+      globalLimitBytes: MAX_LIFETIME_UPLOAD_BYTES,
+      conversationLimitBytes: MAX_CONVERSATION_UPLOAD_BYTES,
+      conversationFileLimit: MAX_CONVERSATION_UPLOAD_FILES,
+    });
+    if (!quota.allowed) {
+      req.resume();
+      const error = quota.reason === 'global_limit'
+        ? 'Đã đạt giới hạn tải tệp toàn hệ thống 500 MB; hiện không thể tải thêm.'
+        : quota.reason === 'conversation_file_limit'
+          ? 'Cuộc trò chuyện đã đạt giới hạn 5 tệp.'
+          : 'Cuộc trò chuyện đã đạt giới hạn dung lượng 50 MiB.';
+      writeJsonResponse(res, 429, { error });
+      return;
+    }
+  } catch (error) {
+    req.resume();
+    console.error('[Attachments] Could not reserve upload quota:', error.message);
+    writeJsonResponse(res, 503, { error: 'Không thể xác nhận hạn mức tải tệp. Vui lòng thử lại sau.' });
     return;
   }
 
@@ -708,12 +762,21 @@ const messageHandlers = {
 
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
+    if (!redisManager.enabled || !redisManager.isConnected) {
+      sendTo(clientId, serverMsg.error(
+        'ATTACHMENT_QUOTA_UNAVAILABLE',
+        'Hệ thống hạn mức tải tệp đang không khả dụng. Vui lòng thử lại sau.',
+      ));
+      return;
+    }
     try {
+      const conversationId = [clientId, partnerId].sort().join(':');
       const ticket = attachmentStorage.issueUploadTicket(
         clientId,
         partnerId,
         payload.fileName,
         payload.size,
+        conversationId,
       );
       sendTo(clientId, serverMsg.attachmentUpload(ticket));
     } catch (error) {

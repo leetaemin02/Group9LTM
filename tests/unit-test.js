@@ -594,6 +594,7 @@ console.log('✅ Caro 20x20 & Dev Mode tests passed');
   const ticket = attachmentStorage.issueUploadTicket('sender', 'receiver', 'photo.png', 8);
   const ticketClaims = attachmentStorage.validateTicket(ticket.ticket, ticket.uploadId);
   assert.strictEqual(ticketClaims.partnerId, 'receiver');
+  assert.strictEqual(ticketClaims.conversationId, null);
   assert.throws(
     () => attachmentStorage.validateTicket(`${ticket.ticket}x`, ticket.uploadId),
     AttachmentError,

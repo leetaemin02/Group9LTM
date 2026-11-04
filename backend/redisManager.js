@@ -168,6 +168,40 @@ end
 return matched
 `;
 
+const RESERVE_UPLOAD_QUOTA_SCRIPT = `
+local reservationKey = KEYS[4]
+if redis.call('EXISTS', reservationKey) == 1 then
+  return 1
+end
+
+local requestedBytes = tonumber(ARGV[1])
+local globalLimitBytes = tonumber(ARGV[2])
+local conversationLimitBytes = tonumber(ARGV[3])
+local conversationFileLimit = tonumber(ARGV[4])
+local reservationTtlSeconds = tonumber(ARGV[5])
+local globalBytes = tonumber(redis.call('GET', KEYS[1]) or '0')
+local conversationBytes = tonumber(redis.call('GET', KEYS[2]) or '0')
+local conversationFiles = tonumber(redis.call('GET', KEYS[3]) or '0')
+
+if globalBytes + requestedBytes > globalLimitBytes then
+  return -1
+end
+if conversationFiles + 1 > conversationFileLimit then
+  return -2
+end
+if conversationBytes + requestedBytes > conversationLimitBytes then
+  return -3
+end
+
+redis.call('INCRBY', KEYS[1], requestedBytes)
+redis.call('INCRBY', KEYS[2], requestedBytes)
+redis.call('INCR', KEYS[3])
+redis.call('EXPIRE', KEYS[2], 86400)
+redis.call('EXPIRE', KEYS[3], 86400)
+redis.call('SET', reservationKey, '1', 'EX', reservationTtlSeconds)
+return 0
+`;
+
 class RedisManager {
   /**
    * @param {object} opts
@@ -239,16 +273,16 @@ class RedisManager {
         }
       });
 
-      this.pubClient.on('connect', () => {
-        console.log('[Redis] ✅ Pub Client đã kết nối');
+      this.pubClient.on('ready', () => {
+        console.log('[Redis] ✅ Pub Client đã sẵn sàng');
         this.pubErrorLogged = false;
         this.pubReady = true;
         this.isConnected = this.pubReady && this.subReady;
       });
 
-      this.subClient.on('connect', () => {
+      this.subClient.on('ready', () => {
         this.subErrorLogged = false;
-        console.log(`[Redis] ✅ Sub Client đã kết nối. Đang đăng ký kênh Pub/Sub...`);
+        console.log('[Redis] ✅ Sub Client đã sẵn sàng. Đang đăng ký kênh Pub/Sub...');
         this._setupSubscriptions();
       });
 
@@ -352,6 +386,38 @@ class RedisManager {
 
   async scanMatchQueue() {
     return this._runMatchScript('scan');
+  }
+
+  async reserveAttachmentUpload({
+    uploadId,
+    conversationId,
+    size,
+    globalLimitBytes = 500_000_000,
+    conversationLimitBytes = 50 * 1024 * 1024,
+    conversationFileLimit = 5,
+  }) {
+    if (!this.isConnected || !this.pubClient) {
+      throw new Error('Redis chưa sẵn sàng; không thể xác nhận hạn mức tải tệp.');
+    }
+
+    const result = await this.pubClient.eval(
+      RESERVE_UPLOAD_QUOTA_SCRIPT,
+      4,
+      'chat:{match}:upload:global:bytes',
+      `chat:{match}:upload:conversation:${conversationId}:bytes`,
+      `chat:{match}:upload:conversation:${conversationId}:files`,
+      `chat:{match}:upload:reservation:${uploadId}`,
+      size,
+      globalLimitBytes,
+      conversationLimitBytes,
+      conversationFileLimit,
+      31 * 60,
+    );
+
+    if (result === -1) return { allowed: false, reason: 'global_limit' };
+    if (result === -2) return { allowed: false, reason: 'conversation_file_limit' };
+    if (result === -3) return { allowed: false, reason: 'conversation_size_limit' };
+    return { allowed: true, alreadyReserved: result === 1 };
   }
 
   async getPendingMatches(clientIds) {
