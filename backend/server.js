@@ -554,7 +554,7 @@ const messageHandlers = {
   },
 
   // ── find_match ────────────────────────────────────────
-  [CLIENT_TYPES.FIND_MATCH](clientId) {
+  async [CLIENT_TYPES.FIND_MATCH](clientId) {
     const client = clients.get(clientId);
     if (!client) return;
 
@@ -581,6 +581,17 @@ const messageHandlers = {
       return;
     }
 
+    if (redisManager.enabled) {
+      try {
+        await redisManager.addOnlineClient(clientId);
+      } catch (error) {
+        console.error(`[Matchmaker] Could not register online presence for ${clientId}:`, error.message);
+        sendTo(clientId, serverMsg.error('MATCHMAKING_UNAVAILABLE', 'Hệ thống ghép cặp đang khởi động hoặc tạm thời không khả dụng. Vui lòng thử lại.'));
+        return;
+      }
+      if (clients.get(clientId) !== client) return;
+    }
+
     client.state = 'WAITING';
     sendTo(clientId, serverMsg.waiting());
 
@@ -592,7 +603,7 @@ const messageHandlers = {
       }
     }, 10_000);
 
-    matchmaker.enqueue(clientId, client.nickname, client.interests, client.mood, client.clientIp, client.deviceId);
+    await matchmaker.enqueue(clientId, client.nickname, client.interests, client.mood, client.clientIp, client.deviceId);
   },
 
   // ── start_solo (chủ động tâm sự hoặc chơi game với Bot Lumi) ─────────────
