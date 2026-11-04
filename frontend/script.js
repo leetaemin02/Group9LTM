@@ -644,6 +644,46 @@ function scheduleReconnect() {
   }, delay);
 }
 
+// Phát hiện khi trình duyệt mất kết nối mạng
+window.addEventListener('offline', () => {
+  console.warn('[Network] Mất kết nối mạng');
+
+  updateConnectionStatus('disconnected');
+
+  if (el.reconnectOverlay) {
+    el.reconnectOverlay.classList.remove('hidden');
+  }
+
+  if (el.reconnectDesc) {
+    el.reconnectDesc.textContent =
+      'Mất kết nối Internet. Đang chờ mạng khôi phục...';
+  }
+
+  // Đóng WebSocket để kích hoạt cơ chế Resume Session hiện có
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+  }
+});
+
+// Phát hiện khi Internet hoạt động trở lại
+window.addEventListener('online', () => {
+  console.log('[Network] Đã có kết nối mạng trở lại');
+
+  if (ws &&
+      (ws.readyState === WebSocket.OPEN ||
+       ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  // Sử dụng nút reconnect có sẵn để hủy timer cũ
+  // và kết nối lại ngay
+  if (el.btnReconnectNow) {
+    el.btnReconnectNow.click();
+  } else if (!reconnectTimer) {
+    connect();
+  }
+});
+
 /** Cập nhật trạng thái kết nối trên UI */
 function updateConnectionStatus(status) {
   el.connectionStatus.className = `status-indicator ${status}`;
