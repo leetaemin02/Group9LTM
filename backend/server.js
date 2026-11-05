@@ -24,6 +24,7 @@ if (typeof process.loadEnvFile === 'function') {
 }
 const { WebSocketServer } = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto'); 
 
 const {
   CLIENT_TYPES,
@@ -210,6 +211,54 @@ async function handleAttachmentUploadRequest(req, res, uploadId) {
 const voiceStorage = new Map();
 const MAX_VOICE_STORAGE_ITEMS = 500;
 const VOICE_TTL_MS = 60 * 60 * 1000; // 1 giờ
+
+const VOICE_REDIS_TTL = 3600;
+
+function voiceKey(voiceId) {
+  return `chat:voice:${voiceId}`;
+}
+
+async function saveVoiceRedis(voiceId, buffer, mimeType) {
+  if (!redisManager.isConnected || !redisManager.pubClient) {
+    throw new Error('Redis chưa sẵn sàng');
+  }
+
+  const data = Buffer.concat([
+    Buffer.from(mimeType + '\n'),
+    buffer
+  ]);
+
+  await redisManager.pubClient.set(
+    voiceKey(voiceId),
+    data,
+    'EX',
+    VOICE_REDIS_TTL
+  );
+}
+
+async function getVoiceRedis(voiceId) {
+  if (!redisManager.isConnected || !redisManager.pubClient) {
+    throw new Error('Redis chưa sẵn sàng');
+  }
+
+  const data = await redisManager.pubClient.getBuffer(
+    voiceKey(voiceId)
+  );
+
+  if (!data) return null;
+
+  const separator = data.indexOf(10);
+
+  if (separator < 0) {
+    throw new Error('Dữ liệu Voice bị lỗi');
+  }
+
+  return {
+    mimeType: data.subarray(0, separator).toString(),
+    buffer: data.subarray(separator + 1)
+  };
+}
+
 const MAX_VOICE_BYTES = 3 * 1024 * 1024; // 3MB tối đa cho 1 đoạn ghi âm
 
 function pruneVoiceStorage() {
@@ -227,62 +276,127 @@ function pruneVoiceStorage() {
 
 function handleVoiceUploadRequest(req, res) {
   let bodyLength = 0;
+  let tooLarge = false;
   const chunks = [];
-  const contentType = req.headers['content-type'] || 'audio/webm';
+
+  const rawMime = (req.headers['content-type'] || 'audio/webm')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+
+  const mimeType = /^audio\/[a-z0-9.+-]+$/.test(rawMime)
+    ? rawMime
+    : 'audio/webm';
 
   req.on('data', (chunk) => {
-    bodyLength += chunk.length;
-    if (bodyLength > MAX_VOICE_BYTES) {
-      req.destroy();
-      writeJsonResponse(res, 413, { error: 'Tệp ghi âm vượt quá giới hạn 3MB.' });
-    } else {
-      chunks.push(chunk);
-    }
-  });
+    if (tooLarge) return;
 
-  req.on('end', () => {
-    if (res.writableEnded) return;
-    if (bodyLength === 0) {
-      writeJsonResponse(res, 400, { error: 'Dữ liệu âm thanh trống.' });
+    bodyLength += chunk.length;
+
+    if (bodyLength > MAX_VOICE_BYTES) {
+      tooLarge = true;
+      chunks.length = 0;
+
+      writeJsonResponse(res, 413, {
+        error: 'Voice vượt quá giới hạn 3MB.'
+      });
       return;
     }
-    pruneVoiceStorage();
-    const voiceId = crypto.randomUUID();
-    const buffer = Buffer.concat(chunks);
-    voiceStorage.set(voiceId, {
-      buffer,
-      mimeType: contentType.split(';')[0].trim() || 'audio/webm',
-      createdAt: Date.now(),
-      size: buffer.length,
-    });
-    writeJsonResponse(res, 201, {
-      ok: true,
-      voiceId,
-      url: `/api/voice/${voiceId}`,
-    });
+
+    chunks.push(chunk);
   });
 
-  req.on('error', () => {
-    if (!res.writableEnded) {
-      writeJsonResponse(res, 500, { error: 'Lỗi tải lên âm thanh.' });
+  req.on('end', async () => {
+    if (tooLarge || res.writableEnded || res.destroyed) return;
+
+    if (bodyLength === 0) {
+      writeJsonResponse(res, 400, {
+        error: 'Dữ liệu Voice trống.'
+      });
+      return;
     }
+
+    const voiceId = crypto.randomUUID();
+    const buffer = Buffer.concat(chunks);
+
+    try {
+      if (redisManager.enabled) {
+        await saveVoiceRedis(voiceId, buffer, mimeType);
+      } else {
+        pruneVoiceStorage();
+
+        voiceStorage.set(voiceId, {
+          buffer,
+          mimeType,
+          createdAt: Date.now(),
+          size: buffer.length
+        });
+      }
+
+      console.log('[VOICE UPLOAD]', {
+        pid: process.pid,
+        voiceId,
+        size: buffer.length,
+        storage: redisManager.enabled ? 'redis' : 'memory'
+      });
+
+      writeJsonResponse(res, 201, {
+        ok: true,
+        voiceId,
+        url: `/api/voice/${voiceId}`
+      });
+    } catch (error) {
+      console.error('[VOICE UPLOAD ERROR]', error.message);
+
+      writeJsonResponse(res, 503, {
+        error: 'Không thể lưu Voice.'
+      });
+    }
+  });
+
+  req.on('error', (error) => {
+    console.error('[VOICE REQUEST ERROR]', error.message);
+
+    writeJsonResponse(res, 500, {
+      error: 'Lỗi tải Voice.'
+    });
   });
 }
 
-function handleVoiceGetRequest(req, res, voiceId) {
-  const item = voiceStorage.get(voiceId);
-  if (!item) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Không tìm thấy đoạn ghi âm này.' }));
-    return;
+async function handleVoiceGetRequest(req, res, voiceId) {
+  try {
+    const item = redisManager.enabled
+      ? await getVoiceRedis(voiceId)
+      : voiceStorage.get(voiceId);
+
+    if (!item) {
+      writeJsonResponse(res, 404, {
+        error: 'Không tìm thấy Voice.'
+      });
+      return;
+    }
+
+    console.log('[VOICE GET]', {
+      pid: process.pid,
+      voiceId,
+      storage: redisManager.enabled ? 'redis' : 'memory'
+    });
+
+    res.writeHead(200, {
+      'Content-Type': item.mimeType,
+      'Content-Length': item.buffer.length,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff'
+    });
+
+    res.end(item.buffer);
+  } catch (error) {
+    console.error('[VOICE GET ERROR]', error.message);
+
+    writeJsonResponse(res, 503, {
+      error: 'Không thể lấy Voice từ Redis.'
+    });
   }
-  res.writeHead(200, {
-    'Content-Type': item.mimeType,
-    'Content-Length': item.buffer.length,
-    'Cache-Control': 'public, max-age=3600',
-    'Accept-Ranges': 'bytes',
-  });
-  res.end(item.buffer);
 }
 
 const httpServer = http.createServer((req, res) => {
