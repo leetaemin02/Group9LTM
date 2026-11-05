@@ -117,7 +117,7 @@ Docker Desktop chỉ chạy container trên máy hiện tại, chưa đưa websi
 
 1. Đẩy thay đổi lên GitHub và merge vào nhánh `main`. Blueprint chỉ deploy nhánh `main`; các commit mới trên nhánh đó tự kích hoạt deploy.
 2. Trong Render Dashboard, tạo **Blueprint Instance** từ repository `leetaemin02/Group9LTM` và xác nhận tạo cả `group9ltm` cùng `group9ltm-redis`. Nếu Render yêu cầu region, giữ Singapore cho cả hai.
-3. Khi Render hỏi các biến `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` và `ATTACHMENT_TOKEN_SECRET`, nhập chúng trong giao diện Render dưới dạng secret. `ATTACHMENT_TOKEN_SECRET` phải có ít nhất 32 byte; không đưa secrets vào Git. Azure Service Principal cần quyền phù hợp để ghi và đọc Blob, đồng thời tài khoản Storage phải bật malware scanning nếu muốn giữ kiểm tra tệp nghiêm ngặt.
+3. Khi Render hỏi các biến `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` và `ATTACHMENT_TOKEN_SECRET`, nhập chúng trong giao diện Render dưới dạng secret. Nếu bật kiểm tra danh tiếng liên kết, nhập thêm `GOOGLE_WEB_RISK_API_KEY`; để trống thì Web Risk bị tắt. `ATTACHMENT_TOKEN_SECRET` phải có ít nhất 32 byte; không đưa secrets vào Git. Azure Service Principal cần quyền phù hợp để ghi và đọc Blob, đồng thời tài khoản Storage phải bật malware scanning nếu muốn giữ kiểm tra tệp nghiêm ngặt.
 4. Chờ Web Service deploy thành công, mở URL `onrender.com` do Render hiển thị trên trang dịch vụ và thử ghép hai trình duyệt/thiết bị khác nhau, gửi tin nhắn và kiểm tra upload.
 5. Để cập nhật website, merge thay đổi qua quy trình Git của dự án vào `main`. Render tự build/deploy; không cần cập nhật Cloudflare hay nhấn “Sync changes” để deploy.
 
@@ -134,8 +134,8 @@ Giới hạn trọn đời chỉ là best-effort khi dùng Render Key Value Free
 Mặc định ứng dụng chỉ dùng heuristic cục bộ; không gửi URL ra ngoài. Để tra cứu URL với Google Web Risk:
 1. Tạo Google Cloud project, bật [Web Risk API](https://cloud.google.com/web-risk/docs/lookup-api) và tạo API key; giới hạn key chỉ dùng Web Risk API.
 2. Cấu hình key bằng secret/environment variable của môi trường deploy. Không commit key hoặc đặt key trong frontend.
-3. Tin nhắn chứa tối đa 5 URL duy nhất sẽ được kiểm tra trước khi chuyển tiếp. Nếu Google xác nhận URL thuộc danh sách phishing/malware/phần mềm không mong muốn, server chặn toàn bộ tin nhắn và thông báo cho cả hai người dùng. Tin nhắn vượt quá giới hạn 5 URL cũng bị chặn để tránh bỏ sót URL chưa quét.
-4. Nếu API lỗi, hệ thống vẫn cho gửi nhưng cảnh báo rằng liên kết chưa được xác minh. Kết quả “không có trong danh sách” không đảm bảo an toàn.
+3. Tin nhắn chứa tối đa 5 URL duy nhất sẽ được kiểm tra trước khi chuyển tiếp. Nếu Google xác nhận URL thuộc danh sách phishing/malware/phần mềm không mong muốn, server chặn toàn bộ tin nhắn và thông báo cho cả hai người dùng. Tin nhắn vượt quá giới hạn 5 URL cũng bị chặn để tránh bỏ sót URL chưa quét. Link HTTPS được Google kiểm tra sạch sẽ hiển thị bình thường, có thể bấm mở và không hiện cảnh báo chung.
+4. Nếu thiếu API key hoặc API lỗi, hệ thống vẫn cho gửi nhưng hiển thị rõ rằng URL chưa được xác minh; URL vẫn có thể bấm mở. Link có dấu hiệu cấu trúc đáng ngờ sẽ kèm cảnh báo. Kết quả “không có trong danh sách” không đảm bảo an toàn.
 
 Ví dụ PowerShell cho phiên chạy local (thay bằng key thật, không lưu vào source):
 ```powershell

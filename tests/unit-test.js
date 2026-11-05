@@ -97,6 +97,7 @@ assert.deepStrictEqual(analyzeLinkSafety('Chào bạn nhé!'), {
 assert.strictEqual(analyzeLinkSafety('Xem https://example.com').hasLinks, true);
 assert.strictEqual(analyzeLinkSafety('Xem https://example.com').suspicious, false);
 assert.strictEqual(analyzeLinkSafety('Email me@example.com nhé').hasLinks, false, 'Email addresses are not links');
+assert.deepStrictEqual(extractUrls('Mở example.com/design/123'), ['https://example.com/design/123']);
 assert.ok(analyzeLinkSafety('Vào http://example.com').reasons.some((reason) => reason.includes('HTTPS')));
 assert.ok(analyzeLinkSafety('Đăng nhập https://example.com/login').suspicious);
 assert.ok(analyzeLinkSafety('Mở https://bit.ly/abc').suspicious);
