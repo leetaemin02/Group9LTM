@@ -18,6 +18,7 @@ x-chat-common: &chat-common
     USE_REDIS: "true"
     REDIS_URL: "redis://redis:6379"
     GROQ_API_KEY: "${GROQ_API_KEY:-}"
+    GOOGLE_SAFE_BROWSING_API_KEY: "${GOOGLE_SAFE_BROWSING_API_KEY:-}"
     # Không đặt NODE_ENV=production khi demo: chế độ đó bật DISALLOW_SAME_DEVICE,
     # khiến 2 tab cùng trình duyệt không thể ghép cặp với nhau.
   depends_on:
@@ -58,4 +59,3 @@ services:
         condition: service_healthy
       chat2:
         condition: service_healthy
-

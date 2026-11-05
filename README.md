@@ -48,7 +48,7 @@ ChatMatch/
 │   ├── moderation.js     # Rate limit, report, block, ban & anti-skip
 │   ├── redisManager.js   # Redis Pub/Sub adapter (Multi-node scaling)
 │   ├── linkSafety.js     # Heuristic nhận diện cấu trúc URL
-│   ├── webRisk.js        # Tra cứu reputation URL với Google Web Risk (tùy chọn)
+│   ├── safeBrowsing.js   # Tra cứu URL với Google Safe Browsing API v4
 │   ├── attachmentStorage.js # Lưu tệp riêng tư trên Azure Blob Storage
 │   ├── package.json      # Dependencies và scripts của backend
 │   ├── package-lock.json # Khóa phiên bản dependencies
@@ -117,7 +117,7 @@ Docker Desktop chỉ chạy container trên máy hiện tại, chưa đưa websi
 
 1. Đẩy thay đổi lên GitHub và merge vào nhánh `main`. Blueprint chỉ deploy nhánh `main`; các commit mới trên nhánh đó tự kích hoạt deploy.
 2. Trong Render Dashboard, tạo **Blueprint Instance** từ repository `leetaemin02/Group9LTM` và xác nhận tạo cả `group9ltm` cùng `group9ltm-redis`. Nếu Render yêu cầu region, giữ Singapore cho cả hai.
-3. Khi Render hỏi các biến `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` và `ATTACHMENT_TOKEN_SECRET`, nhập chúng trong giao diện Render dưới dạng secret. Nếu bật kiểm tra danh tiếng liên kết, nhập thêm `GOOGLE_WEB_RISK_API_KEY`; để trống thì Web Risk bị tắt. `ATTACHMENT_TOKEN_SECRET` phải có ít nhất 32 byte; không đưa secrets vào Git. Azure Service Principal cần quyền phù hợp để ghi và đọc Blob, đồng thời tài khoản Storage phải bật malware scanning nếu muốn giữ kiểm tra tệp nghiêm ngặt.
+3. Khi Render hỏi các biến `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` và `ATTACHMENT_TOKEN_SECRET`, nhập chúng trong giao diện Render dưới dạng secret. Để bật kiểm tra URL, nhập `GOOGLE_SAFE_BROWSING_API_KEY`; API này miễn phí, không yêu cầu billing/thẻ, và chỉ được dùng cho mục đích phi thương mại. `ATTACHMENT_TOKEN_SECRET` phải có ít nhất 32 byte; không đưa secrets vào Git. Azure Service Principal cần quyền phù hợp để ghi và đọc Blob, đồng thời tài khoản Storage phải bật malware scanning nếu muốn giữ kiểm tra tệp nghiêm ngặt.
 4. Chờ Web Service deploy thành công, mở URL `onrender.com` do Render hiển thị trên trang dịch vụ và thử ghép hai trình duyệt/thiết bị khác nhau, gửi tin nhắn và kiểm tra upload.
 5. Để cập nhật website, merge thay đổi qua quy trình Git của dự án vào `main`. Render tự build/deploy; không cần cập nhật Cloudflare hay nhấn “Sync changes” để deploy.
 
@@ -129,21 +129,22 @@ Backend chỉ nhận file upload khi Redis đang bật và kết nối sẵn sà
 
 Giới hạn trọn đời chỉ là best-effort khi dùng Render Key Value Free: instance miễn phí không ghi liên tục dữ liệu xuống đĩa, và restart có thể làm mất counter, khiến giới hạn bắt đầu lại. Không dùng cấu hình này làm cam kết cứng về chi phí Azure. Redis local trong Compose có AOF/volume; điều này không thay đổi tính bền vững của Render Free Key Value. Azure vẫn có thể tính phí giao dịch, quét malware và tải xuống; đặt Azure budget alert riêng.
 
-### Bật kiểm tra danh tiếng liên kết (tùy chọn)
+### Bật kiểm tra liên kết với Google Safe Browsing (tùy chọn, không cần thẻ)
 
-Mặc định ứng dụng chỉ dùng heuristic cục bộ; không gửi URL ra ngoài. Để tra cứu URL với Google Web Risk:
-1. Tạo Google Cloud project, bật [Web Risk API](https://cloud.google.com/web-risk/docs/lookup-api) và tạo API key; giới hạn key chỉ dùng Web Risk API.
-2. Cấu hình key bằng secret/environment variable của môi trường deploy. Không commit key hoặc đặt key trong frontend.
-3. Tin nhắn chứa tối đa 5 URL duy nhất sẽ được kiểm tra trước khi chuyển tiếp. Nếu Google xác nhận URL thuộc danh sách phishing/malware/phần mềm không mong muốn, server chặn toàn bộ tin nhắn và thông báo cho cả hai người dùng. Tin nhắn vượt quá giới hạn 5 URL cũng bị chặn để tránh bỏ sót URL chưa quét. Link HTTPS được Google kiểm tra sạch sẽ hiển thị bình thường, có thể bấm mở và không hiện cảnh báo chung.
-4. Nếu thiếu API key hoặc API lỗi, hệ thống vẫn cho gửi nhưng hiển thị rõ rằng URL chưa được xác minh; URL vẫn có thể bấm mở. Link có dấu hiệu cấu trúc đáng ngờ sẽ kèm cảnh báo. Kết quả “không có trong danh sách” không đảm bảo an toàn.
+Mặc định ứng dụng chỉ dùng heuristic cục bộ; link bình thường không bị cảnh báo chung. Để đối chiếu URL với [Google Safe Browsing API v4](https://developers.google.com/safe-browsing/v4/lookup-api):
+1. Tạo/chọn Google Cloud project, bật **Safe Browsing API** (API v4) và tạo API key. Tài liệu Google nêu API miễn phí, không cần bật billing hoặc nhập thẻ. Giới hạn key chỉ dùng Safe Browsing API; nếu key trước đó bị giới hạn cho Web Risk API, sửa restriction hoặc tạo key mới.
+2. Cấu hình key dưới dạng secret `GOOGLE_SAFE_BROWSING_API_KEY` trong Render hoặc biến môi trường local. Không commit key hoặc đặt key trong frontend.
+3. Server gửi tối đa 5 URL trong một request để tra cứu phishing, malware và unwanted software. URL khớp threat list sẽ bị chặn; link sạch không bị cảnh báo chung. Khi Google đánh dấu link, giao diện hiển thị cảnh báo theo hướng dẫn và đường dẫn Safe Browsing Advisory.
+4. Nếu thiếu key hoặc API tạm lỗi, tin nhắn vẫn được gửi; ứng dụng không hiện cảnh báo lỗi dịch vụ cho mọi URL, nhưng vẫn cảnh báo dấu hiệu cấu trúc đáng ngờ. “Không có trong danh sách” không đảm bảo an toàn. URL được gửi tới Google để kiểm tra, nên tránh dùng cho URL riêng tư.
+5. Safe Browsing API v4 đã deprecated và chỉ được dùng cho mục đích phi thương mại. Đây là phương án miễn phí cho project học tập, không nên dựa vào như dịch vụ thương mại lâu dài. Google có thể ngừng hỗ trợ hoặc thay đổi hạn mức.
 
-Ví dụ PowerShell cho phiên chạy local (thay bằng key thật, không lưu vào source):
+Ví dụ PowerShell cho phiên chạy local (không lưu key trong source):
 ```powershell
-$env:GOOGLE_WEB_RISK_API_KEY='YOUR_API_KEY'
+$env:GOOGLE_SAFE_BROWSING_API_KEY='YOUR_API_KEY'
 npm start
 ```
 
-Việc bật API gửi URL nguyên bản (có thể gồm path/query) tới Google. Chỉ bật sau khi đã quyết định cách thông báo người dùng và rà soát điều khoản, quyền riêng tư, hạn mức/chi phí của Google Cloud. Link rút gọn có thể che giấu đích đến; ứng dụng không tự mở link hoặc theo redirect.
+Việc bật API gửi URL nguyên bản (có thể gồm path/query) tới Google. Hãy thông báo người dùng và cân nhắc quyền riêng tư trước khi bật; API miễn phí nhưng có hạn mức sử dụng. Link rút gọn có thể che giấu đích đến; ứng dụng không tự mở link hoặc theo redirect.
 
 ### Gửi ảnh, video và tài liệu
 
@@ -283,7 +284,7 @@ Mọi message đều là JSON: `{ "type": "...", "payload": { ... } }`
 - ✅ **Báo cáo và chặn ghép cặp tạm thời**:
   - Báo cáo sẽ ngắt phòng chat và chặn hai phiên trình duyệt vừa ghép không gặp lại nhau trong 5 phút, kể cả khi tải lại cùng tab nếu `sessionStorage` còn giữ `deviceId`.
   - Tin nhắn bị bộ lọc nội dung từ chối sẽ ngắt phòng, ban người gửi 10 phút và chặn cặp thiết bị/IP trong bộ nhớ tiến trình.
-- ✅ **Cảnh báo và kiểm tra liên kết** – Heuristic cục bộ luôn nhận diện dấu hiệu đáng ngờ; có thể bật Google Web Risk để tra cứu phishing/malware. URL được xác nhận nguy hiểm bị chặn trước khi chuyển tiếp; API lỗi sẽ hiển thị rõ trạng thái chưa xác minh. Web Risk tùy chọn, tắt mặc định; việc tra cứu chia sẻ URL với Google.
+- ✅ **Cảnh báo và kiểm tra liên kết** – Heuristic cục bộ nhận diện một số dấu hiệu đáng ngờ; tùy chọn đối chiếu URL với Google Safe Browsing v4. URL được API đánh dấu bị chặn; dịch vụ miễn phí, nhưng đã deprecated, phi thương mại và gửi URL Google để kiểm tra.
 - ✅ **Gửi tệp trong chat** – Chia sẻ ảnh/video và tài liệu phổ biến qua Azure Blob Storage riêng tư; kiểm tra loại/dung lượng, URL tải chỉ đọc hết hạn sau 24 giờ, có policy mẫu để Azure bắt đầu xóa blob sau 1 ngày (thời điểm xóa thực tế có thể trễ).
 - ✅ **Tuân thủ tiêu chuẩn an toàn bảo mật (CVE, OWASP, NIST, RFC)**:
   - **OWASP ASVS v4.0 / CWE-1385:** Chống tấn công Cross-Site WebSocket Hijacking (CSWSH) qua xác thực `Origin` trong `verifyClient`.

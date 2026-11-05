@@ -695,60 +695,6 @@ console.log('✅ Caro 20x20 & Dev Mode tests passed');
   assert.strictEqual(delegationKeyRequests, 1, 'A scan timeout must not request a download SAS');
   console.log('✅ Azure Blob attachment validation and upload tickets passed');
 
-  console.log('--- Testing Google Web Risk URL checker ---');
-  const { createWebRiskChecker } = require('../backend/webRisk');
-  const disabledChecker = createWebRiskChecker({
-    apiKey: '',
-    fetchImpl: () => assert.fail('Web Risk must not be called without an API key'),
-  });
-  assert.strictEqual((await disabledChecker('https://example.com')).status, 'disabled');
-  const tooManyUrls = Array.from({ length: 6 }, (_, index) => `https://example${index}.com`).join(' ');
-  const limitedChecker = createWebRiskChecker({
-    apiKey: 'test-key',
-    fetchImpl: () => assert.fail('Over-limit URL messages must not partially scan and pass'),
-  });
-  assert.strictEqual((await limitedChecker(tooManyUrls)).status, 'limit_exceeded');
-
-  let fetchCount = 0;
-  let requestUrl;
-  const cleanChecker = createWebRiskChecker({
-    apiKey: 'test-key',
-    fetchImpl: async (url) => {
-      fetchCount++;
-      requestUrl = url;
-      return { ok: true, json: async () => ({}) };
-    },
-  });
-  assert.strictEqual((await cleanChecker('See https://example.com')).status, 'clean');
-  assert.strictEqual((await cleanChecker('Again https://example.com')).status, 'clean');
-  assert.strictEqual(fetchCount, 1, 'Clean URL results should be cached');
-  assert.strictEqual(requestUrl.searchParams.get('uri'), 'https://example.com');
-  assert.ok(requestUrl.searchParams.getAll('threatTypes').includes('SOCIAL_ENGINEERING'));
-
-  const threatChecker = createWebRiskChecker({
-    apiKey: 'test-key',
-    fetchImpl: async () => ({
-      ok: true,
-      json: async () => ({ threat: { threatTypes: ['SOCIAL_ENGINEERING'] } }),
-    }),
-  });
-  const threatResult = await threatChecker('Visit https://phishing.example');
-  assert.strictEqual(threatResult.status, 'threat');
-  assert.deepStrictEqual(threatResult.threatTypes, ['SOCIAL_ENGINEERING']);
-
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    const unavailableChecker = createWebRiskChecker({
-      apiKey: 'test-key',
-      fetchImpl: async () => ({ ok: false, status: 503 }),
-    });
-    assert.strictEqual((await unavailableChecker('https://example.net')).status, 'unavailable');
-  } finally {
-    console.error = originalConsoleError;
-  }
-  console.log('✅ Google Web Risk URL checker passed');
-
   console.log('--- 13. Testing Redis-backed Matchmaker adapter ---');
   const redisQueue = {
     enabled: true,
