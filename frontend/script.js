@@ -405,10 +405,11 @@ function escapeHtml(str) {
 }
 
 /** Hiện toast thông báo */
-function showToast(message, type = 'info', duration = 3500) {
+function showToast(message, type = 'info', duration = 3500, source = null) {
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.textContent = message;
+  if (source === 'google_safe_browsing') appendSafeBrowsingAttribution(toast);
   el.toastContainer.appendChild(toast);
 
   setTimeout(() => {
@@ -1337,6 +1338,7 @@ function appendMessage(text, direction, timestamp, linkSafety = null) {
     const warning = document.createElement('div');
     warning.className = `link-safety-warning${linkSafety.suspicious ? ' suspicious' : ''}`;
     warning.textContent = getLinkSafetyMessage(linkSafety);
+    if (linkSafety.source === 'google_safe_browsing') appendSafeBrowsingAttribution(warning);
     bubble.appendChild(warning);
   }
 
@@ -1388,8 +1390,6 @@ function shouldShowLinkSafetyNotice(linkSafety) {
   return Boolean(
     linkSafety.blocked
       || linkSafety.suspicious
-      || linkSafety.reputation === 'disabled'
-      || linkSafety.reputation === 'unavailable'
       || linkSafety.reputation === 'limit_exceeded'
       || linkSafety.reputation === 'threat',
   );
@@ -1803,7 +1803,22 @@ function uploadSelectedAttachment(ticket) {
 
 function showLinkSafetyToast(linkSafety) {
   if (!shouldShowLinkSafetyNotice(linkSafety)) return;
-  showToast(getLinkSafetyMessage(linkSafety), linkSafety.blocked ? 'error' : 'warning', 6500);
+  showToast(
+    getLinkSafetyMessage(linkSafety),
+    linkSafety.blocked ? 'error' : 'warning',
+    6500,
+    linkSafety.source,
+  );
+}
+
+function appendSafeBrowsingAttribution(container) {
+  container.appendChild(document.createTextNode(' Advisory provided by Google: '));
+  const link = document.createElement('a');
+  link.href = 'https://developers.google.com/safe-browsing/v4/advisory';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Safe Browsing Advisory';
+  container.appendChild(link);
 }
 
 function getLinkSafetyMessage(linkSafety) {
@@ -1814,23 +1829,15 @@ function getLinkSafetyMessage(linkSafety) {
     if (linkSafety.blockedReason === 'unsafe_scheme') {
       return '🚫 Tin nhắn bị chặn vì chứa giao thức liên kết không an toàn.';
     }
-    return '🚫 Tin nhắn bị chặn vì Google Web Risk nhận diện URL thuộc danh sách lừa đảo hoặc phần mềm độc hại. URL không được gửi cho người nhận.';
-  }
-  if (linkSafety.reputation === 'disabled') {
-    const heuristicNote = linkSafety.suspicious ? ` Dấu hiệu cấu trúc: ${linkSafety.reasons.join(' ')}` : '';
-    return `⚠️ Google Web Risk chưa được bật trên máy chủ. Liên kết vẫn được gửi nhưng chưa được kiểm tra danh tiếng.${heuristicNote}`;
-  }
-  if (linkSafety.reputation === 'unavailable') {
-    const heuristicNote = linkSafety.suspicious ? ` Dấu hiệu cấu trúc: ${linkSafety.reasons.join(' ')}` : '';
-    return `⚠️ Google Web Risk hiện không kiểm tra được liên kết. Tin nhắn vẫn được gửi nhưng chưa xác minh.${heuristicNote}`;
+    return '🚫 Tin nhắn bị chặn vì Google Safe Browsing đánh dấu URL có thể nguy hiểm. URL không được gửi cho người nhận.';
   }
   if (linkSafety.reputation === 'clean') {
-    return `⚠️ Google Web Risk chưa ghi nhận liên kết trong danh sách đe dọa, nhưng có dấu hiệu cấu trúc đáng ngờ: ${linkSafety.reasons.join(' ')}`;
+    return `⚠️ Phát hiện dấu hiệu cấu trúc đáng ngờ: ${linkSafety.reasons.join(' ')}`;
   }
   if (linkSafety.suspicious) {
-    return `⚠️ Liên kết có dấu hiệu đáng ngờ: ${linkSafety.reasons.join(' ')} Hệ thống chưa xác minh danh tiếng liên kết.`;
+    return `⚠️ Liên kết có dấu hiệu đáng ngờ: ${linkSafety.reasons.join(' ')}`;
   }
-  return '⚠️ Tin nhắn có liên kết. Hệ thống chưa xác minh danh tiếng liên kết; chỉ mở nếu bạn tin người gửi.';
+  return '⚠️ Google Safe Browsing đánh dấu URL có thể nguy hiểm.';
 }
 
 /** Thêm thông báo hệ thống */

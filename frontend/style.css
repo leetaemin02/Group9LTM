@@ -1856,6 +1856,12 @@ body {
   font-weight: 700;
 }
 
+.link-safety-warning a,
+.toast a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .message-time {
   font-size: 0.68rem;
   font-family: var(--font-mono);

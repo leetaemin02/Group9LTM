@@ -41,7 +41,7 @@ const {addViolation, getBanRemaining, instantBan} = require('./redis/violationSt
 
 const { checkContent, maskProfanity, MODERATION_ACTIONS } = require('./contentFilter');
 const { analyzeLinkSafety } = require('./linkSafety');
-const { checkMessageLinks } = require('./webRisk');
+const { checkMessageLinks } = require('./safeBrowsing');
 const {
   AttachmentError,
   createAttachmentStorage,
@@ -1234,7 +1234,7 @@ const messageHandlers = {
     try {
       reputation = await checkMessageLinks(payload.text);
     } catch (error) {
-      console.error('[WebRisk] Could not check message links:', error.message);
+      console.error('[SafeBrowsing] Could not check message links:', error.message);
       reputation = { status: 'unavailable', checkedCount: 0, threatTypes: [], complete: false };
     }
 
@@ -1250,12 +1250,15 @@ const messageHandlers = {
       reputation: reputation.status,
       threatTypes: reputation.threatTypes,
     };
+    if (reputation.status === 'threat') {
+      reputationWarning.source = 'google_safe_browsing';
+    }
 
     if (reputation.status === 'threat' || reputation.status === 'limit_exceeded' || unsafeScheme) {
       reputationWarning.blocked = true;
       if (reputation.status === 'threat') {
         reputationWarning.blockedReason = 'threat';
-        reputationWarning.reasons.push('Google Web Risk nhận diện liên kết thuộc danh sách mối đe dọa.');
+        reputationWarning.reasons.push('Google Safe Browsing đánh dấu liên kết này có thể nguy hiểm.');
       } else if (reputation.status === 'limit_exceeded') {
         reputationWarning.blockedReason = 'limit_exceeded';
         reputationWarning.reasons.push('Tin nhắn vượt quá giới hạn 5 URL được kiểm tra.');
@@ -1270,11 +1273,11 @@ const messageHandlers = {
 
     const timestamp = new Date().toISOString();
     const messageLinkSafety = hasLinkSignal
-      && (linkSafety.suspicious || reputation.status !== 'clean')
+      && (linkSafety.suspicious || reputation.status === 'threat')
       ? reputationWarning
       : null;
     sendTo(partnerId, serverMsg.message(payload.text, timestamp, messageLinkSafety));
-    if (hasLinkSignal && (linkSafety.suspicious || reputation.status !== 'clean')) {
+    if (hasLinkSignal && (linkSafety.suspicious || reputation.status === 'threat')) {
       sendTo(clientId, serverMsg.linkWarning(reputationWarning));
     }
   },
