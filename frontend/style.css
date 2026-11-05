@@ -1826,6 +1826,18 @@ body {
   border-bottom-left-radius: 6px;
 }
 
+.message-content a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.message-content a:hover {
+  opacity: 0.82;
+}
+
 .link-safety-warning {
   margin-top: 8px;
   padding-top: 7px;
