@@ -183,9 +183,11 @@ $principalId = '<principal-object-id>'
 $storageId = az storage account show --name $storageAccount --resource-group $resourceGroup --query id --output tsv
 $containerScope = "$storageId/blobServices/default/containers/$containerName"
 
-az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 'Storage Blob Data Contributor' --scope $containerScope
+az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 'Storage Blob Data Owner' --scope $containerScope
 az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role 'Storage Blob Delegator' --scope $storageId
 ```
+
+`Storage Blob Data Owner` ở scope container cần thiết vì ứng dụng đọc Defender malware-scan tags trước khi chia sẻ tệp; role này cũng bao gồm quyền dữ liệu cần cho upload. `Storage Blob Delegator` ở scope storage account cho phép tạo user-delegation SAS để cấp link tải chỉ đọc.
 
 Với local developer, lấy Object ID bằng `$principalId = az ad signed-in-user show --query id --output tsv` và đổi `ServicePrincipal` thành `User`. Cần quyền quản trị phù hợp để tạo role assignment; sau khi gán role, có thể cần chờ vài phút để RBAC có hiệu lực. Container có thể tạo từ Portal nếu lệnh CLI chưa được cấp quyền data-plane.
 
