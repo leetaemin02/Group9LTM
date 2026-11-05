@@ -25,6 +25,8 @@ const RECONNECT_MAX = 30000;
 /** Debounce thời gian typing (ms) */
 const TYPING_DEBOUNCE = 1500;
 
+const MESSAGE_URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>"']+|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})(?::\d{1,5})?(?:\/[^\s<>"']*)?/giu;
+
 // ═══════════════════════════════════════════════════
 // DOM Elements
 // ═══════════════════════════════════════════════════
@@ -1327,11 +1329,11 @@ function appendMessage(text, direction, timestamp, linkSafety = null) {
 
   const content = document.createElement('div');
   content.className = 'message-content';
-  content.textContent = text;
+  appendMessageTextWithLinks(content, text);
 
   bubble.appendChild(content);
 
-  if (linkSafety && linkSafety.hasLinks) {
+  if (shouldShowLinkSafetyNotice(linkSafety)) {
     const warning = document.createElement('div');
     warning.className = `link-safety-warning${linkSafety.suspicious ? ' suspicious' : ''}`;
     warning.textContent = getLinkSafetyMessage(linkSafety);
@@ -1347,6 +1349,50 @@ function appendMessage(text, direction, timestamp, linkSafety = null) {
 
   el.chatMessages.appendChild(bubble);
   scrollToBottom();
+}
+
+function appendMessageTextWithLinks(container, text) {
+  let cursor = 0;
+  for (const match of text.matchAll(MESSAGE_URL_PATTERN)) {
+    const start = match.index;
+    if (start > 0 && text[start - 1] === '@') continue;
+
+    let displayUrl = match[0];
+    while (/[.,!?;:)\]}]$/u.test(displayUrl)) displayUrl = displayUrl.slice(0, -1);
+    if (!displayUrl) continue;
+
+    const href = /^https?:\/\//iu.test(displayUrl) ? displayUrl : `https://${displayUrl}`;
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(href);
+    } catch {
+      continue;
+    }
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') continue;
+
+    container.appendChild(document.createTextNode(text.slice(cursor, start)));
+    const anchor = document.createElement('a');
+    anchor.href = parsedUrl.href;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.referrerPolicy = 'no-referrer';
+    anchor.textContent = displayUrl;
+    container.appendChild(anchor);
+    cursor = start + displayUrl.length;
+  }
+  container.appendChild(document.createTextNode(text.slice(cursor)));
+}
+
+function shouldShowLinkSafetyNotice(linkSafety) {
+  if (!linkSafety || !linkSafety.hasLinks) return false;
+  return Boolean(
+    linkSafety.blocked
+      || linkSafety.suspicious
+      || linkSafety.reputation === 'disabled'
+      || linkSafety.reputation === 'unavailable'
+      || linkSafety.reputation === 'limit_exceeded'
+      || linkSafety.reputation === 'threat',
+  );
 }
 
 // ─── Voice Audio Player & Messages ──────────────────────────────────────────
@@ -1756,22 +1802,30 @@ function uploadSelectedAttachment(ticket) {
 }
 
 function showLinkSafetyToast(linkSafety) {
-  if (!linkSafety || !linkSafety.hasLinks) return;
+  if (!shouldShowLinkSafetyNotice(linkSafety)) return;
   showToast(getLinkSafetyMessage(linkSafety), linkSafety.blocked ? 'error' : 'warning', 6500);
 }
 
 function getLinkSafetyMessage(linkSafety) {
   if (linkSafety.blocked) {
-    return linkSafety.reputation === 'limit_exceeded'
-      ? '🚫 Tin nhắn có quá 5 liên kết nên đã bị chặn để tránh bỏ sót URL chưa được kiểm tra.'
-      : '🚫 Tin nhắn đã bị chặn vì Google Web Risk nhận diện liên kết có thể chứa lừa đảo hoặc phần mềm độc hại. URL không được gửi cho người nhận.';
+    if (linkSafety.blockedReason === 'limit_exceeded') {
+      return '🚫 Tin nhắn có quá 5 liên kết nên đã bị chặn để tránh bỏ sót URL chưa được kiểm tra.';
+    }
+    if (linkSafety.blockedReason === 'unsafe_scheme') {
+      return '🚫 Tin nhắn bị chặn vì chứa giao thức liên kết không an toàn.';
+    }
+    return '🚫 Tin nhắn bị chặn vì Google Web Risk nhận diện URL thuộc danh sách lừa đảo hoặc phần mềm độc hại. URL không được gửi cho người nhận.';
+  }
+  if (linkSafety.reputation === 'disabled') {
+    const heuristicNote = linkSafety.suspicious ? ` Dấu hiệu cấu trúc: ${linkSafety.reasons.join(' ')}` : '';
+    return `⚠️ Google Web Risk chưa được bật trên máy chủ. Liên kết vẫn được gửi nhưng chưa được kiểm tra danh tiếng.${heuristicNote}`;
   }
   if (linkSafety.reputation === 'unavailable') {
-    return '⚠️ Chưa kiểm tra được danh tiếng liên kết do dịch vụ gặp sự cố. Tin nhắn vẫn được gửi; đừng xem đây là xác nhận an toàn.';
+    const heuristicNote = linkSafety.suspicious ? ` Dấu hiệu cấu trúc: ${linkSafety.reasons.join(' ')}` : '';
+    return `⚠️ Google Web Risk hiện không kiểm tra được liên kết. Tin nhắn vẫn được gửi nhưng chưa xác minh.${heuristicNote}`;
   }
   if (linkSafety.reputation === 'clean') {
-    const heuristicNote = linkSafety.suspicious ? ` Dấu hiệu cấu trúc: ${linkSafety.reasons.join(' ')}` : '';
-    return `ℹ️ Google Web Risk chưa ghi nhận liên kết trong danh sách đe dọa; điều này không đảm bảo an toàn.${heuristicNote}`;
+    return `⚠️ Google Web Risk chưa ghi nhận liên kết trong danh sách đe dọa, nhưng có dấu hiệu cấu trúc đáng ngờ: ${linkSafety.reasons.join(' ')}`;
   }
   if (linkSafety.suspicious) {
     return `⚠️ Liên kết có dấu hiệu đáng ngờ: ${linkSafety.reasons.join(' ')} Hệ thống chưa xác minh danh tiếng liên kết.`;

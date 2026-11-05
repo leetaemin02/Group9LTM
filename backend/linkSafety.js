@@ -31,7 +31,7 @@ function extractUrls(text) {
     .filter((match) => match.index === 0 || text[match.index - 1] !== '@')
     .map((match) => stripTrailingPunctuation(match[0]))
     .filter(Boolean)
-    .map((link) => /^www\./iu.test(link) ? `https://${link}` : link)
+    .map((link) => /^https?:\/\//iu.test(link) ? link : `https://${link}`)
     .filter((link) => {
       try {
         const url = new URL(link);

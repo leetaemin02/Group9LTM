@@ -31,6 +31,8 @@ services:
         sync: false
       - key: ATTACHMENT_TOKEN_SECRET
         sync: false
+      - key: GOOGLE_WEB_RISK_API_KEY
+        sync: false
       - key: SKIP_MALWARE_SCAN
         value: "false"
 

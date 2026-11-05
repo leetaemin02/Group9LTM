@@ -1419,32 +1419,40 @@ const messageHandlers = {
     const currentClient = clients.get(clientId);
     if (!currentClient || currentClient.state !== 'CHATTING' || roomManager.getPartnerId(clientId) !== partnerId) return;
 
+    const unsafeScheme = linkSafety.reasons.some((reason) => reason.includes('giao thức không an toàn'));
+    const hasLinkSignal = linkSafety.hasLinks || unsafeScheme;
     const reputationWarning = {
-      hasLinks: linkSafety.hasLinks,
+      hasLinks: hasLinkSignal,
       suspicious: linkSafety.suspicious || reputation.status === 'threat' || reputation.status === 'limit_exceeded',
       reasons: [...linkSafety.reasons],
       reputation: reputation.status,
       threatTypes: reputation.threatTypes,
     };
 
-    if (reputation.status === 'threat' || reputation.status === 'limit_exceeded') {
+    if (reputation.status === 'threat' || reputation.status === 'limit_exceeded' || unsafeScheme) {
       reputationWarning.blocked = true;
-      reputationWarning.reasons.push(
-        reputation.status === 'threat'
-          ? 'Google Web Risk nhận diện liên kết thuộc danh sách mối đe dọa.'
-          : 'Tin nhắn vượt quá giới hạn 5 URL được kiểm tra.',
-      );
+      if (reputation.status === 'threat') {
+        reputationWarning.blockedReason = 'threat';
+        reputationWarning.reasons.push('Google Web Risk nhận diện liên kết thuộc danh sách mối đe dọa.');
+      } else if (reputation.status === 'limit_exceeded') {
+        reputationWarning.blockedReason = 'limit_exceeded';
+        reputationWarning.reasons.push('Tin nhắn vượt quá giới hạn 5 URL được kiểm tra.');
+      } else {
+        reputationWarning.blockedReason = 'unsafe_scheme';
+        reputationWarning.reasons.push('Tin nhắn chứa giao thức liên kết không an toàn.');
+      }
       sendTo(clientId, serverMsg.linkWarning(reputationWarning));
       sendTo(partnerId, serverMsg.linkWarning(reputationWarning));
       return;
     }
 
     const timestamp = new Date().toISOString();
-    const messageLinkSafety = linkSafety.hasLinks
-      ? { ...reputationWarning, hasLinks: true }
+    const messageLinkSafety = hasLinkSignal
+      && (linkSafety.suspicious || reputation.status !== 'clean')
+      ? reputationWarning
       : null;
     sendTo(partnerId, serverMsg.message(payload.text, timestamp, messageLinkSafety));
-    if (linkSafety.hasLinks) {
+    if (hasLinkSignal && (linkSafety.suspicious || reputation.status !== 'clean')) {
       sendTo(clientId, serverMsg.linkWarning(reputationWarning));
     }
   },

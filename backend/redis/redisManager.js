@@ -13,6 +13,7 @@
 
 const Redis = require('ioredis');
 const { MATCH_SCRIPT } = require('./matchmaking');
+const { RESERVE_UPLOAD_SCRIPT } = require('./uploadQuota');
 const pubsub = require('./pubsub');
 const { randomUUID } = require('crypto');
 
@@ -181,6 +182,56 @@ class RedisManager {
 
   async scanMatchQueue() {
     return this._runMatchScript('scan');
+  }
+
+  async reserveAttachmentUpload({
+    uploadId,
+    conversationId,
+    size,
+    globalLimitBytes = 500_000_000,
+    conversationLimitBytes = 50 * 1024 * 1024,
+    conversationFileLimit = 5,
+  }) {
+    if (!this.isConnected || !this.pubClient) {
+      throw new Error('Redis chưa sẵn sàng; không thể xác nhận hạn mức tải tệp.');
+    }
+    if (
+      typeof uploadId !== 'string'
+      || uploadId.length === 0
+      || typeof conversationId !== 'string'
+      || conversationId.length === 0
+      || !Number.isSafeInteger(size)
+      || size <= 0
+      || !Number.isSafeInteger(globalLimitBytes)
+      || globalLimitBytes <= 0
+      || !Number.isSafeInteger(conversationLimitBytes)
+      || conversationLimitBytes <= 0
+      || !Number.isSafeInteger(conversationFileLimit)
+      || conversationFileLimit <= 0
+    ) {
+      throw new TypeError('Thông tin dự trữ quota upload không hợp lệ.');
+    }
+
+    const result = await this.pubClient.eval(
+      RESERVE_UPLOAD_SCRIPT,
+      4,
+      'chat:{upload}:global:bytes',
+      `chat:{upload}:conversation:${conversationId}:bytes`,
+      `chat:{upload}:conversation:${conversationId}:files`,
+      `chat:{upload}:reservation:${uploadId}`,
+      uploadId,
+      globalLimitBytes,
+      conversationLimitBytes,
+      conversationFileLimit,
+      size,
+    );
+
+    if (result === 0) return { allowed: true, alreadyReserved: false };
+    if (result === 1) return { allowed: true, alreadyReserved: true };
+    if (result === -1) return { allowed: false, reason: 'global_limit' };
+    if (result === -2) return { allowed: false, reason: 'conversation_file_limit' };
+    if (result === -3) return { allowed: false, reason: 'conversation_size_limit' };
+    throw new Error(`Redis trả về kết quả dự trữ quota không hợp lệ: ${result}`);
   }
 
   async getPendingMatches(clientIds) {
