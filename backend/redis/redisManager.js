@@ -15,6 +15,7 @@ const Redis = require('ioredis');
 const { MATCH_SCRIPT } = require('./matchmaking');
 const { RESERVE_UPLOAD_SCRIPT } = require('./uploadQuota');
 const pubsub = require('./pubsub');
+const { randomUUID } = require('crypto');
 
 
 
@@ -35,6 +36,7 @@ class RedisManager {
     onRoomLeft,
     onOnlineCount,
   } = {}) {
+    this.instanceId = randomUUID();
     this.redisUrl = redisUrl;
     this.enabled = enabled;
     this.isConnected = false;

@@ -30,8 +30,14 @@ class RoomManager {
    * @param {object|null} [botInstance=null]
    * @returns {string} roomId
    */
-  createRoom(clientId1, clientId2, isBotRoom = false, botInstance = null) {
-    const roomId = uuidv4();
+  createRoom(
+    clientId1,
+    clientId2,
+    isBotRoom = false,
+    botInstance = null,
+    sharedRoomId = null
+  ) {
+    const roomId = sharedRoomId || uuidv4();
     const room = {
       roomId,
       clients: [clientId1, clientId2],
