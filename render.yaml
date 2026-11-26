@@ -33,8 +33,12 @@ services:
         sync: false
       - key: GOOGLE_SAFE_BROWSING_API_KEY
         sync: false
+      # Storage Account chatmatchfiles2026 ở vùng malaysiawest (hiện chưa được Azure hỗ trợ
+      # Microsoft Defender for Storage on-upload malware scanning). Bật SKIP_MALWARE_SCAN="true"
+      # để upload không bị treo chờ tag 3 phút rồi timeout 503. Khi chuyển Storage sang vùng có
+      # Defender (ví dụ southeastasia) và bật On-upload scanning, đổi lại thành "false".
       - key: SKIP_MALWARE_SCAN
-        value: "false"
+        value: "true"
 
   - type: keyvalue
     name: group9ltm-redis

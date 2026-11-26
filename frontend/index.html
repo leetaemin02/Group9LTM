@@ -5,9 +5,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>ChatMatch – Trạm Tần Số Trò Chuyện 1-1</title>
+  <title>ChatMatch – Trạm Tần Số Trò Chuyện 1-1 &amp; Nhóm</title>
   <meta name="description"
-    content="Không gian ghép cặp ẩn danh 1-1 thời gian thực, trò chuyện cùng tần số và đấu cờ Caro trực tiếp qua WebSocket" />
+    content="Không gian ghép cặp ẩn danh 1-1 và trò chuyện nhóm tới 60 người thời gian thực theo chủ đề, sở thích hoặc ngẫu nhiên qua WebSocket" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -40,7 +40,7 @@
           </div>
           <div class="logo-text">
             <h1>ChatMatch</h1>
-            <span class="subtitle">Trạm tần số 1-1</span>
+            <span class="subtitle">Trạm tần số 1-1 &amp; Nhóm</span>
           </div>
         </div>
       </div>
@@ -83,7 +83,7 @@
               <span class="kicker-wave" aria-hidden="true">
                 <span></span><span></span><span></span><span></span>
               </span>
-              <span>CHAT 1-1 ẨN DANH</span>
+              <span>CHAT ẨN DANH 1-1 &amp; NHÓM</span>
             </div>
 
             <h2 class="showcase-headline">
@@ -92,8 +92,8 @@
             </h2>
 
             <p class="showcase-lead">
-              Không cần đăng ký hay để lại thông tin gì cả. Chọn tâm trạng, chọn vài sở thích rồi vào tám chuyện, hỏi
-              câu mở màn hoặc rủ làm ván cờ Caro giải khuây.
+              Không cần đăng ký hay để lại thông tin gì cả. Ghép đôi 1-1, vào nhóm ẩn danh tới 60 người theo chủ đề
+              hoặc ngẫu nhiên, hoặc rủ làm ván cờ Caro giải khuây.
             </p>
           </div>
 
@@ -127,22 +127,22 @@
             <div class="pillar-pill">
               <span class="pillar-icon">🔒</span>
               <div>
-                <strong>Ẩn danh tuyệt đối</strong>
+                <strong>Ẩn danh &amp; Tự hủy</strong>
                 <span>Rời phòng là sạch tin</span>
               </div>
             </div>
             <div class="pillar-pill">
-              <span class="pillar-icon">⚔️</span>
+              <span class="pillar-icon">👥</span>
               <div>
-                <strong>Chơi Caro 1-1</strong>
-                <span>Cỡ bàn 10x10, 15x15, 20x20</span>
+                <strong>Nhóm tới 60 người</strong>
+                <span>Chủ đề, ngẫu nhiên &amp; giữ nhóm ≥3</span>
               </div>
             </div>
             <div class="pillar-pill">
               <span class="pillar-icon">🤖</span>
               <div>
-                <strong>Bạn ảo Lumi</strong>
-                <span>Tâm sự & chơi cờ lúc phòng vắng</span>
+                <strong>Lumi AI &amp; Caro</strong>
+                <span>Tâm sự &amp; chơi cờ 1-1</span>
               </div>
             </div>
           </div>
@@ -267,15 +267,63 @@
             <!-- Cụm nút hành động chính -->
             <div class="login-actions-row">
               <button id="btn-start" class="btn btn-primary btn-large btn-glow">
-                <span class="btn-text">Tìm bạn trò chuyện</span>
+                <span class="btn-text">Tìm bạn 1-1</span>
                 <span class="btn-arrow" aria-hidden="true">→</span>
               </button>
               <button id="btn-start-solo" class="btn btn-solo btn-large" type="button"
-                title="Tâm sự hoặc chơi cờ cùng bạn ảo Lumi">
+                title="Tâm sự hoặc chơi game cùng bạn ảo Lumi">
                 <span class="solo-badge-tag">AI</span>
                 <span class="btn-text">Nói chuyện với Lumi</span>
               </button>
             </div>
+
+            <!-- Cụm nút vào Nhóm ẩn danh & Phòng Game nhiều người -->
+            <div class="multiplayer-entry-grid">
+              <button id="btn-open-group-hub" class="btn btn-group-entry" type="button"
+                title="Vào trò chuyện ẩn danh theo nhóm chủ đề, sở thích hoặc ngẫu nhiên">
+                <span class="group-entry-left">
+                  <span class="group-entry-icon" aria-hidden="true">👥</span>
+                  <span class="group-entry-copy">
+                    <strong>Nhóm ẩn danh</strong>
+                    <small>Chủ đề / Ngẫu nhiên • Tối đa 60</small>
+                  </span>
+                </span>
+                <span class="group-entry-right">
+                  <span id="saved-groups-badge" class="saved-groups-badge hidden">⭐ 0</span>
+                  <span class="btn-arrow" aria-hidden="true">→</span>
+                </span>
+              </button>
+
+              <button id="btn-open-game-hub" class="btn btn-game-entry" type="button"
+                title="Vào phòng game ẩn danh chơi cùng 2 đến 10 người">
+                <span class="group-entry-left">
+                  <span class="group-entry-icon game-icon" aria-hidden="true">🎮</span>
+                  <span class="group-entry-copy">
+                    <strong>Phòng Game nhóm</strong>
+                    <small>2–10 người • 5 trò chơi vui nhộn</small>
+                  </span>
+                </span>
+                <span class="group-entry-right">
+                  <span class="btn-arrow" aria-hidden="true">→</span>
+                </span>
+              </button>
+            </div>
+
+            <!-- Nút Giữ kết nối 1-1 & Nhập mã hẹn gặp lại -->
+            <button id="btn-open-pair-hub" class="btn btn-pair-entry" type="button"
+              title="Xem những người hợp cạ đã Giữ kết nối hoặc nhập Mã hẹn gặp lại">
+              <span class="group-entry-left">
+                <span class="group-entry-icon pair-icon" aria-hidden="true">💛</span>
+                <span class="group-entry-copy">
+                  <strong>Giữ kết nối</strong>
+                  <small>Gặp lại người cũ 1-1 • Nhập mã hẹn • Lưu 40 tin gần nhất</small>
+                </span>
+              </span>
+              <span class="group-entry-right">
+                <span id="saved-pairs-badge" class="saved-groups-badge pair-badge hidden">💛 0</span>
+                <span class="btn-arrow" aria-hidden="true">→</span>
+              </span>
+            </button>
 
             <div class="card-footer-note">
               Trò chuyện văn minh, tôn trọng lẫn nhau nhé! ✨
@@ -319,10 +367,10 @@
         <!-- Gợi ý vào phòng cùng Trợ lý Lumi khi phòng vắng -->
         <div id="solo-hint-box" class="solo-hint-box hidden">
           <div class="solo-hint-badge">✨ PHÒNG HƠI VẮNG</div>
-          <p class="solo-hint-msg">Hiện tại chưa có ai rảnh... Bạn có muốn vào nói chuyện hoặc làm ván cờ với
+          <p class="solo-hint-msg">Hiện tại chưa có ai rảnh... Bạn có muốn vào nói chuyện hoặc chơi game giải trí cùng
             <strong>Lumi</strong> luôn không?</p>
           <button id="btn-accept-solo" class="btn btn-solo btn-small">
-            🤖 Chat &amp; chơi cờ với Lumi
+            🤖 Chat &amp; chơi game với Lumi
           </button>
         </div>
 
@@ -349,6 +397,14 @@
                   <span id="partner-nickname" class="partner-name">Đang tải…</span>
                   <button type="button" id="bot-badge" class="bot-badge hidden" title="Bấm để xem giới thiệu Lumi">🤖
                     Bạn ảo Lumi</button>
+                  <button type="button" id="group-capacity-pill" class="group-header-pill hidden"
+                    title="Bấm để mở bảng thành viên nhóm">👥 <span id="group-capacity-text">1/60</span></button>
+                  <span id="group-keep-pill" class="group-keep-pill hidden"
+                    title="Cần ít nhất 3 thành viên đồng ý giữ lại nhóm">💨 Tự hủy khi trống</span>
+                  <button type="button" id="pair-code-pill" class="room-code-chip pair-code-header-pill hidden"
+                    title="Đã Giữ kết nối! Bấm để sao chép Mã hẹn gặp lại">
+                    🔑 <span id="pair-code-pill-text">CHAT-XXXX-XXXX</span>
+                  </button>
                   <button type="button" id="partner-mood" class="partner-mood-tag hidden"
                     title="Xem tâm trạng của bạn này">
                     <span class="mood-tag-icon">💭</span>
@@ -361,12 +417,29 @@
             </div>
 
             <div class="chat-actions">
+              <button id="btn-pair-keep" class="btn btn-group-keep btn-pair-keep btn-small hidden" type="button"
+                title="Cả 2 cùng bấm để Giữ kết nối lần sau, nhận Mã hẹn gặp lại và lưu 40 tin nhắn gần nhất">
+                <span class="action-icon">💛</span> <span id="btn-pair-keep-label" class="action-label">Giữ kết nối</span>
+              </button>
+              <button id="btn-group-keep" class="btn btn-group-keep btn-small hidden" type="button"
+                title="Chọn giữ lại nhóm để lần sau vào trò chuyện tiếp (cần tối thiểu 3 thành viên đồng ý)">
+                <span class="action-icon">⭐</span> <span id="btn-group-keep-label" class="action-label">Giữ nhóm (0/3)</span>
+              </button>
+              <button id="btn-group-members" class="btn btn-action-game btn-small hidden" type="button"
+                title="Xem thành viên &amp; trạng thái giữ nhóm">
+                <span class="action-icon">👥</span> <span id="btn-group-members-label" class="action-label">Thành viên</span>
+              </button>
               <button id="btn-icebreaker" class="btn btn-action-icebreaker btn-small"
                 title="Gợi ý câu mở đầu đỡ ngượng">
                 <span class="action-icon">🎲</span> <span class="action-label">Gợi ý bắt chuyện</span>
               </button>
-              <button id="btn-minigame" class="btn btn-action-game btn-small" title="Rủ chơi cờ Caro 1-1">
-                <span class="action-icon">🎮</span> <span class="action-label">Rủ chơi Caro</span>
+              <button id="btn-minigame" class="btn btn-action-game btn-small"
+                title="Mở kho trò chơi ngay trong cuộc trò chuyện (Đố vui, Nối từ, Bom số, Caro, Gián điệp)">
+                <span class="action-icon">🎮</span> <span id="btn-minigame-label" class="action-label">Chơi Game</span>
+              </button>
+              <button id="btn-group-switch" class="btn btn-warning btn-small hidden" type="button"
+                title="Đổi sang nhóm khác cùng chế độ">
+                <span class="action-icon">🔄</span> <span class="action-label">Đổi nhóm</span>
               </button>
               <button id="btn-skip" class="btn btn-warning btn-small" title="Đổi sang người khác (Phím tắt: Esc)">
                 <span class="action-icon">⏭️</span> Bỏ qua <kbd class="kbd-hint">Esc</kbd>
@@ -413,6 +486,15 @@
 
           <!-- Cụm Soạn Thảo Nổi (Floating Composer Dock) -->
           <div class="chat-composer-dock">
+            <!-- Popover gợi ý Tag @thành viên trong nhóm chat & phòng game -->
+            <div id="mention-popover" class="mention-popover hidden" role="listbox" aria-label="Tag thành viên">
+              <div class="mention-popover-header">
+                <span>@ Nhắc đến thành viên (chọn hoặc nhấn Enter)</span>
+                <button id="btn-close-mention-popover" type="button" class="btn-close-mini" title="Đóng">✕</button>
+              </div>
+              <div id="mention-popover-list" class="mention-popover-list"></div>
+            </div>
+
             <!-- Khay gợi ý Nhãn dán theo từ khóa -->
             <div id="meme-suggestions-bar" class="meme-suggestions-bar hidden" aria-label="Gợi ý nhãn dán">
               <div class="meme-suggestions-header">
@@ -624,6 +706,105 @@
             <button id="btn-game-replay" class="btn btn-primary btn-small hidden">🔄 Chơi lại ván nữa</button>
           </div>
         </aside>
+
+        <!-- Bảng Thông Tin Nhóm & Thành Viên (Split-Stage cạnh bên khi chat nhóm) -->
+        <aside id="group-panel" class="game-panel group-panel hidden" aria-label="Thông tin nhóm và danh sách thành viên">
+          <div class="game-header">
+            <div class="game-title-group">
+              <div class="game-badge-icon">👥</div>
+              <div>
+                <h4>Phòng Nhóm Ẩn Danh</h4>
+                <span id="group-panel-capacity" class="game-rule-hint">1 / 60 thành viên đang trực tuyến</span>
+              </div>
+            </div>
+
+            <button id="btn-close-group-panel" class="btn-close-banner" type="button" title="Đóng bảng nhóm">✕</button>
+          </div>
+
+          <!-- Thẻ Bình Chọn Giữ Lại Nhóm (Cần >= 3 người) -->
+          <div id="group-keep-card" class="group-keep-card">
+            <div class="group-keep-card-top">
+              <span class="group-keep-title">⭐ Giữ lại nhóm trò chuyện</span>
+              <span id="group-panel-keep-badge" class="group-keep-count-badge">0 / 3</span>
+            </div>
+
+            <div class="keep-progress-track" aria-hidden="true">
+              <div id="group-keep-progress-fill" class="keep-progress-fill" style="width: 0%"></div>
+            </div>
+
+            <p id="group-panel-keep-desc" class="group-keep-desc">
+              Cần ít nhất 3 thành viên cùng chọn giữ để lưu nhóm cho lần sau. Nếu không, nhóm sẽ tự biến mất khi mọi người thoát.
+            </p>
+
+            <button id="btn-panel-vote-keep" class="btn btn-group-keep btn-small group-keep-full-btn" type="button">
+              ⭐ Tôi muốn giữ nhóm này
+            </button>
+          </div>
+
+          <!-- Chủ đề & Sở thích của nhóm -->
+          <div id="group-panel-tags" class="group-panel-tags"></div>
+
+          <!-- Tìm nhanh thành viên (hữu ích khi nhóm tới 60 người) -->
+          <div class="group-member-search-wrap">
+            <input type="text" id="input-group-member-search" class="emoji-search-input"
+              placeholder="🔍 Tìm thành viên trong nhóm…" autocomplete="off" />
+          </div>
+
+          <!-- Danh sách thành viên trực tuyến -->
+          <div id="group-members-list" class="group-members-list" role="list">
+            <!-- Render động bằng JS -->
+          </div>
+        </aside>
+
+        <!-- Đấu Trường Phòng Game Nhiều Người (2–10 người/phòng) -->
+        <aside id="multi-game-panel" class="game-panel multi-game-panel hidden" aria-label="Đấu trường phòng game nhiều người">
+          <div class="multi-game-topbar">
+            <div class="game-title-group">
+              <div id="multi-game-icon" class="game-badge-icon">⚡</div>
+              <div class="multi-game-heading">
+                <h4 id="multi-game-title">Đố Vui Tốc Độ</h4>
+                <div class="multi-game-meta-row">
+                  <button type="button" id="btn-copy-game-code" class="room-code-chip" title="Bấm để sao chép mã phòng">
+                    🔑 <span id="multi-game-code">------</span>
+                  </button>
+                  <span id="multi-game-mode-badge" class="multi-game-pill hidden">💬 Chơi trong chat</span>
+                  <span id="multi-game-count-pill" class="multi-game-pill">👥 1/10</span>
+                  <span id="multi-game-timer-pill" class="multi-game-timer hidden">⏱️ 15s</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="multi-game-top-actions">
+              <button type="button" id="btn-multi-game-seat" class="btn btn-primary btn-small hidden">
+                🙋 Tham gia bàn
+              </button>
+              <button type="button" id="btn-multi-game-start" class="btn btn-primary btn-small hidden">
+                ▶ Bắt đầu
+              </button>
+              <button type="button" id="btn-multi-game-lobby" class="btn btn-secondary btn-small hidden">
+                🎮 Đổi game
+              </button>
+              <button type="button" id="btn-multi-game-close" class="btn-close-banner hidden" title="Đóng bảng trò chơi">
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <!-- Dải chọn nhanh game cho Chủ phòng khi ở sảnh phòng game -->
+          <div id="multi-game-switcher" class="multi-game-switcher hidden">
+            <button type="button" class="mini-game-chip" data-game="quiz_race">⚡ Đố vui</button>
+            <button type="button" class="mini-game-chip" data-game="word_chain">⛓️ Nối từ</button>
+            <button type="button" class="mini-game-chip" data-game="undercover">🕵️ Gián điệp</button>
+            <button type="button" class="mini-game-chip" data-game="number_bomb">💣 Bom số</button>
+            <button type="button" class="mini-game-chip" data-game="caro_arena">⚔️ Caro</button>
+          </div>
+
+          <!-- Thanh Bảng điểm & Người chơi (bấm để @tag hoặc xem thứ hạng) -->
+          <div id="multi-game-players-strip" class="multi-game-players-strip" aria-label="Danh sách người chơi"></div>
+
+          <!-- Khu vực nội dung tương tác của từng game -->
+          <div id="multi-game-arena-body" class="multi-game-arena-body"></div>
+        </aside>
       </div>
     </section>
 
@@ -633,7 +814,7 @@
       <div class="modal-content">
         <div class="modal-header-icon danger">🚩</div>
         <h3>Báo cáo vi phạm</h3>
-        <p>Nếu người này làm phiền hay nói năng thô lỗ, bạn hãy gửi lý do nhé. Hệ thống sẽ tạm chặn hai người gặp lại
+        <p id="report-modal-desc">Nếu người này làm phiền hay nói năng thô lỗ, bạn hãy gửi lý do nhé. Hệ thống sẽ tạm chặn hai người gặp lại
           nhau trong 5 phút:</p>
         <textarea id="input-report-reason" placeholder="Lý do báo cáo (ví dụ: chửi bậy, quấy rối, gửi link rác…)"
           maxlength="200" rows="3"></textarea>
@@ -648,13 +829,58 @@
     <div id="modal-game-invite" class="modal hidden">
       <div class="modal-backdrop"></div>
       <div class="modal-content">
-        <div class="modal-header-icon primary">⚔️</div>
-        <h3>Có người rủ chơi Caro!</h3>
-        <p id="game-invite-description"><b id="game-inviter-name">Bạn kia</b> vừa rủ bạn làm một ván cờ Caro cho vui.
+        <div id="game-invite-icon" class="modal-header-icon primary">🎮</div>
+        <h3 id="game-invite-title">Có người rủ chơi game!</h3>
+        <p id="game-invite-description"><b id="game-inviter-name">Bạn kia</b> vừa rủ bạn chơi một ván game giải trí ngay trong phòng chat.
         </p>
         <div class="modal-actions">
           <button id="btn-game-decline" class="btn btn-secondary">Để sau</button>
-          <button id="btn-game-accept" class="btn btn-primary">Chơi luôn ⚔️</button>
+          <button id="btn-game-accept" class="btn btn-primary">Chơi luôn 🎮</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Chọn Minigame Ngay Trong Chat 1-1 / Lumi / Nhóm ═══════ -->
+    <div id="modal-minigame-picker" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content group-hub-modal minigame-picker-modal">
+        <div class="group-hub-header">
+          <div class="group-hub-title-wrap">
+            <span class="group-hub-icon game-hub-icon">🎮</span>
+            <div>
+              <h3>Chọn Trò Chơi Ngay Tại Đây</h3>
+              <p id="minigame-picker-desc">Chơi trực tiếp ngay trong cuộc trò chuyện mà không cần rời phòng!</p>
+            </div>
+          </div>
+          <button type="button" id="btn-close-minigame-picker" class="btn-close-banner" title="Đóng">✕</button>
+        </div>
+
+        <div id="minigame-picker-grid" class="game-catalog-grid">
+          <button type="button" class="game-choice-card" data-pick-game="quiz_race">
+            <span class="game-choice-icon">⚡</span>
+            <strong>Đố Vui Tốc Độ</strong>
+            <small>2–10 người • 8 câu đố vui cực cuốn</small>
+          </button>
+          <button type="button" class="game-choice-card" data-pick-game="word_chain">
+            <span class="game-choice-icon">⛓️</span>
+            <strong>Nối Từ Thần Tốc</strong>
+            <small>2–10 người • Nối từ 2 tiếng siêu kịch tính</small>
+          </button>
+          <button type="button" class="game-choice-card" data-pick-game="number_bomb">
+            <span class="game-choice-icon">💣</span>
+            <strong>Đặt Bom Số</strong>
+            <small>2–10 người • Thu hẹp 1–100 né bom</small>
+          </button>
+          <button type="button" class="game-choice-card" data-pick-game="caro">
+            <span class="game-choice-icon">⚔️</span>
+            <strong>Cờ Caro</strong>
+            <small id="picker-caro-sub">10×10 / 15×15 / 20×20 đối kháng</small>
+          </button>
+          <button type="button" class="game-choice-card" data-pick-game="undercover" id="picker-card-undercover">
+            <span class="game-choice-icon">🕵️</span>
+            <strong>Ai Là Gián Điệp?</strong>
+            <small id="picker-undercover-sub">3–10 người • Đoán từ &amp; tìm gián điệp</small>
+          </button>
         </div>
       </div>
     </div>
@@ -717,11 +943,303 @@
       <div class="modal-backdrop"></div>
       <div class="modal-content">
         <div class="modal-header-icon danger">🚪</div>
-        <h3>Rời cuộc trò chuyện?</h3>
-        <p>Bạn có chắc chắn muốn kết thúc cuộc trò chuyện này và quay lại trang chủ không?</p>
+        <h3 id="leave-modal-title">Rời cuộc trò chuyện?</h3>
+        <p id="leave-modal-desc">Bạn có chắc chắn muốn kết thúc cuộc trò chuyện này và quay lại trang chủ không?</p>
+        <div id="leave-modal-group-note" class="leave-group-note hidden"></div>
         <div class="modal-actions">
           <button id="btn-cancel-leave" class="btn btn-secondary" type="button">Ở lại</button>
+          <button id="btn-keep-and-leave" class="btn btn-group-keep hidden" type="button">⭐ Giữ &amp; Rời nhóm</button>
           <button id="btn-confirm-leave" class="btn btn-danger" type="button">Rời phòng</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Sảnh Trò Chuyện Nhóm Ẩn Danh (Group Hub) ═══════ -->
+    <div id="modal-group-hub" class="modal hidden" role="dialog" aria-modal="true" aria-label="Trò chuyện nhóm ẩn danh">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content group-hub-modal">
+        <div class="group-hub-header">
+          <div class="group-hub-title-wrap">
+            <span class="group-hub-icon" aria-hidden="true">👥</span>
+            <div>
+              <h3>Trò chuyện nhóm ẩn danh</h3>
+              <p class="group-hub-subtitle">Tối đa 60 thành viên/nhóm • Tự biến mất khi trống (trừ khi ≥3 người giữ)</p>
+            </div>
+          </div>
+          <button id="btn-close-group-hub" class="btn-close-banner" type="button" title="Đóng">✕</button>
+        </div>
+
+        <div class="group-hub-tabs" id="group-hub-tabs" role="tablist">
+          <button type="button" class="group-hub-tab active" data-tab="quick" role="tab">🎯 Ghép nhanh</button>
+          <button type="button" class="group-hub-tab" data-tab="browse" role="tab">🌐 Nhóm đang mở</button>
+          <button type="button" class="group-hub-tab" data-tab="saved" role="tab">
+            ⭐ Nhóm đã giữ <span id="tab-saved-count" class="tab-count-pill">0</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Ghép nhanh theo Chủ đề/Sở thích hoặc Ngẫu nhiên -->
+        <div id="group-tab-quick" class="group-hub-panel">
+          <div class="group-mode-card">
+            <div class="group-mode-head">
+              <span class="group-mode-badge topic">🎯 CÙNG CHỦ ĐỀ / SỞ THÍCH</span>
+              <span class="group-cap-tag">Tối đa 60 người</span>
+            </div>
+            <p class="group-mode-desc">
+              Ghép vào nhóm đang hoạt động có cùng chủ đề hoặc sở thích với bạn (tự mở nhóm mới nếu chưa có).
+            </p>
+            <div id="group-quick-interests-preview" class="group-preview-tags"></div>
+            <div class="group-topic-input-wrap">
+              <input type="text" id="input-group-topic" class="emoji-search-input" maxlength="60"
+                placeholder="Nhập chủ đề cụ thể (tùy chọn, vd: Tâm sự đêm khuya, IELTS, Phim…)" autocomplete="off" />
+            </div>
+            <div class="group-topic-presets" id="group-topic-presets">
+              <button type="button" class="topic-preset-chip" data-topic="Tâm sự đêm khuya">🌙 Tâm sự đêm khuya</button>
+              <button type="button" class="topic-preset-chip" data-topic="Cùng học tập">📚 Cùng học tập</button>
+              <button type="button" class="topic-preset-chip" data-topic="Góc âm nhạc">🎵 Góc âm nhạc</button>
+              <button type="button" class="topic-preset-chip" data-topic="Tìm đồng đội game">🎮 Tìm đồng đội game</button>
+              <button type="button" class="topic-preset-chip" data-topic="Tám chuyện tự do">☕ Tám chuyện tự do</button>
+            </div>
+            <div class="group-mode-actions">
+              <button id="btn-group-join-topic" class="btn btn-primary btn-small" type="button">
+                🎯 Ghép nhóm cùng chủ đề →
+              </button>
+              <button id="btn-group-create-topic" class="btn btn-secondary btn-small" type="button">
+                ＋ Tạo nhóm chủ đề mới
+              </button>
+            </div>
+          </div>
+
+          <div class="group-mode-card random-card">
+            <div class="group-mode-head">
+              <span class="group-mode-badge random">🎲 NHÓM NGẪU NHIÊN</span>
+              <span class="group-cap-tag">Tối đa 60 người</span>
+            </div>
+            <p class="group-mode-desc">
+              Tham gia ngẫu nhiên vào một phòng nhóm ẩn danh đang mở để làm quen thật nhiều bạn mới bất ngờ.
+            </p>
+            <div class="group-mode-actions">
+              <button id="btn-group-join-random" class="btn btn-solo btn-small" type="button">
+                🎲 Vào nhóm ngẫu nhiên ngay →
+              </button>
+            </div>
+          </div>
+
+          <div class="group-rules-footnote">
+            <span>💨 Sau khi mọi người thoát, nhóm sẽ tự động biến mất.</span>
+            <span>⭐ Chọn <b>Giữ nhóm</b> trong phòng: đủ <b>3 thành viên trở lên</b> đồng ý, nhóm sẽ được lưu để vào trò chuyện tiếp lần sau!</span>
+          </div>
+        </div>
+
+        <!-- Tab 2: Danh sách nhóm đang mở -->
+        <div id="group-tab-browse" class="group-hub-panel hidden">
+          <div class="group-browse-toolbar">
+            <div class="group-filter-pills" id="group-browse-filters">
+              <button type="button" class="filter-pill active" data-mode="all">Tất cả</button>
+              <button type="button" class="filter-pill" data-mode="topic">🎯 Chủ đề</button>
+              <button type="button" class="filter-pill" data-mode="random">🎲 Ngẫu nhiên</button>
+            </div>
+            <div class="group-browse-search-row">
+              <input type="text" id="input-group-browse-search" class="emoji-search-input"
+                placeholder="🔍 Lọc theo tên nhóm hoặc chủ đề…" autocomplete="off" />
+              <button id="btn-refresh-group-list" class="btn btn-secondary btn-small" type="button" title="Tải lại danh sách">🔄</button>
+            </div>
+          </div>
+          <div id="group-browse-list" class="group-cards-list">
+            <!-- Render động -->
+          </div>
+        </div>
+
+        <!-- Tab 3: Nhóm đã giữ (đạt >= 3 người đồng ý giữ) -->
+        <div id="group-tab-saved" class="group-hub-panel hidden">
+          <div class="group-saved-info-bar">
+            ⭐ Nhóm đạt từ <b>3 thành viên cùng chọn giữ</b> trở lên sẽ được bảo lưu ngay cả khi tất cả đã rời đi, giúp bạn quay lại trò chuyện tiếp bất cứ lúc nào.
+          </div>
+          <div id="group-saved-list" class="group-cards-list">
+            <!-- Render động -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Sảnh Phòng Game Nhiều Người (2–10 người) ═══════ -->
+    <div id="modal-game-hub" class="modal hidden" role="dialog" aria-modal="true" aria-label="Phòng Game Nhiều Người Ẩn Danh">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content group-hub-modal game-hub-modal">
+        <div class="group-hub-header">
+          <div class="group-hub-title-wrap">
+            <span class="group-hub-icon game-hub-icon" aria-hidden="true">🎮</span>
+            <div>
+              <h3>Phòng Game Nhiều Người Ẩn Danh</h3>
+              <p class="group-hub-subtitle">Từ 2 đến tối đa 10 người/phòng • Chỉ hiện biệt danh &amp; hỗ trợ tag @</p>
+            </div>
+          </div>
+          <button id="btn-close-game-hub" class="btn-close-banner" type="button" title="Đóng">✕</button>
+        </div>
+
+        <div class="group-hub-tabs game-hub-tabs" id="game-hub-tabs" role="tablist">
+          <button type="button" class="group-hub-tab active" data-tab="play" role="tab">🎮 Chọn game &amp; Chơi</button>
+          <button type="button" class="group-hub-tab" data-tab="browse" role="tab">🌐 Phòng đang mở</button>
+        </div>
+
+        <!-- Tab 1: Chọn game, ghép nhanh, tạo phòng hoặc nhập mã -->
+        <div id="game-hub-tab-play" class="group-hub-panel">
+          <div id="game-catalog-grid" class="game-catalog-grid">
+            <button type="button" class="game-choice-card active" data-game="quiz_race">
+              <div class="game-choice-top"><span class="game-choice-icon">⚡</span><span class="game-choice-cap">2–10 người</span></div>
+              <strong>Đố Vui Tốc Độ</strong>
+              <small>8 câu đố mẹo &amp; kiến thức, nhanh tay ăn điểm cao!</small>
+            </button>
+            <button type="button" class="game-choice-card" data-game="word_chain">
+              <div class="game-choice-top"><span class="game-choice-icon">⛓️</span><span class="game-choice-cap">2–10 người</span></div>
+              <strong>Nối Từ Thần Tốc</strong>
+              <small>Nối từ tiếng Việt 2 tiếng theo lượt với đếm ngược 16s!</small>
+            </button>
+            <button type="button" class="game-choice-card" data-game="undercover">
+              <div class="game-choice-top"><span class="game-choice-icon">🕵️</span><span class="game-choice-cap">3–10 người</span></div>
+              <strong>Ai Là Gián Điệp?</strong>
+              <small>Mô tả từ bí mật, tranh luận tag @ và bỏ phiếu tìm gián điệp!</small>
+            </button>
+            <button type="button" class="game-choice-card" data-game="number_bomb">
+              <div class="game-choice-top"><span class="game-choice-icon">💣</span><span class="game-choice-cap">2–10 người</span></div>
+              <strong>Đặt Bom Số</strong>
+              <small>Thu hẹp khoảng số 1–100 để né quả bom ẩn siêu kịch tính!</small>
+            </button>
+            <button type="button" class="game-choice-card" data-game="caro_arena">
+              <div class="game-choice-top"><span class="game-choice-icon">⚔️</span><span class="game-choice-cap">2–10 người</span></div>
+              <strong>Cờ Caro Khán Đài</strong>
+              <small>2 người đấu bàn 15×15, các bạn khác cổ vũ &amp; luân phiên lên sàn!</small>
+            </button>
+          </div>
+
+          <div class="game-create-options">
+            <input type="text" id="input-game-room-name" class="emoji-search-input" maxlength="50"
+              placeholder="Tên phòng tùy chọn (để trống sẽ tự đặt tên vui)…" autocomplete="off" />
+            <label class="game-max-select-wrap" title="Giới hạn tối đa số người trong phòng (2 đến 10)">
+              <span>Tối đa:</span>
+              <select id="select-game-max-players" class="game-max-select">
+                <option value="10" selected>10 người</option>
+                <option value="8">8 người</option>
+                <option value="6">6 người</option>
+                <option value="4">4 người</option>
+                <option value="2">2 người</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="group-mode-actions">
+            <button id="btn-game-room-quick" class="btn btn-primary btn-small" type="button">
+              ⚡ Ghép nhanh phòng game →
+            </button>
+            <button id="btn-game-room-create" class="btn btn-solo btn-small" type="button">
+              ＋ Tạo phòng mới
+            </button>
+          </div>
+
+          <div class="game-code-join-row">
+            <input type="text" id="input-game-room-code" class="emoji-search-input" maxlength="10"
+              placeholder="Hoặc nhập mã phòng 6 ký tự (vd: A7K9P2)…" autocomplete="off" />
+            <button id="btn-game-room-join-code" class="btn btn-secondary btn-small" type="button">
+              🔑 Vào bằng mã
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab 2: Danh sách phòng game đang mở -->
+        <div id="game-hub-tab-browse" class="group-hub-panel hidden">
+          <div class="group-browse-toolbar">
+            <div class="group-filter-pills" id="game-browse-filters">
+              <button type="button" class="filter-pill active" data-game="all">Tất cả</button>
+              <button type="button" class="filter-pill" data-game="quiz_race">⚡ Đố vui</button>
+              <button type="button" class="filter-pill" data-game="word_chain">⛓️ Nối từ</button>
+              <button type="button" class="filter-pill" data-game="undercover">🕵️ Gián điệp</button>
+              <button type="button" class="filter-pill" data-game="number_bomb">💣 Bom số</button>
+              <button type="button" class="filter-pill" data-game="caro_arena">⚔️ Caro</button>
+            </div>
+            <div class="group-browse-search-row">
+              <button id="btn-refresh-game-rooms" class="btn btn-secondary btn-small" type="button">🔄 Tải lại danh sách phòng</button>
+            </div>
+          </div>
+          <div id="game-room-browse-list" class="group-cards-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Trung Tâm Giữ Kết Nối 1-1 & Mã Hẹn Gặp Lại ═══════ -->
+    <div id="modal-pair-hub" class="modal hidden" role="dialog" aria-label="Giữ kết nối 1-1 và Mã hẹn gặp lại">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content group-hub-modal pair-hub-modal">
+        <div class="group-hub-header">
+          <div class="group-hub-title-wrap">
+            <span class="group-hub-icon pair-hub-icon">💛</span>
+            <div>
+              <h3>Giữ kết nối (Chat 1-1)</h3>
+              <p>Hoàn toàn ẩn danh • Chỉ lưu khi cả 2 cùng đồng ý • Giữ lại 40 tin nhắn gần nhất</p>
+            </div>
+          </div>
+          <button id="btn-close-pair-hub" class="btn-close-banner" type="button" title="Đóng">✕</button>
+        </div>
+
+        <!-- Ô nhập Mã hẹn gặp lại (hỗ trợ đổi điện thoại / máy tính khác) -->
+        <div class="pair-code-box">
+          <div class="pair-code-box-head">
+            <strong>🔑 Nhập Mã hẹn gặp lại</strong>
+            <span>Dùng khi bạn đổi máy hoặc mở trình duyệt khác</span>
+          </div>
+          <div class="game-code-join-row">
+            <input type="text" id="input-pair-code" class="emoji-search-input" maxlength="20"
+              placeholder="Ví dụ: CHAT-A7K9-P2M4…" autocomplete="off" />
+            <button id="btn-pair-join-code" class="btn btn-primary btn-small" type="button">
+              💛 Gặp lại ngay →
+            </button>
+          </div>
+        </div>
+
+        <div class="pair-list-toolbar">
+          <span class="pair-list-heading">Danh sách đã Giữ kết nối trên thiết bị này</span>
+          <button id="btn-refresh-pair-list" class="btn btn-secondary btn-small" type="button">🔄 Cập nhật trạng thái</button>
+        </div>
+
+        <div id="pair-saved-list" class="group-cards-list">
+          <!-- Render động bằng JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Lời Mời Gặp Lại (Từ người đã Giữ kết nối) ═══════ -->
+    <div id="modal-pair-invite" class="modal hidden" role="dialog" aria-label="Lời mời trò chuyện lại">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div id="pair-invite-avatar" class="modal-header-icon primary">💛</div>
+        <h3>Người quen muốn gặp lại!</h3>
+        <p id="pair-invite-desc"><b id="pair-invite-name">Người ấy</b> vừa mời bạn vào tiếp tục cuộc trò chuyện 1-1 (giữ nguyên tin nhắn gần nhất).</p>
+        <div class="modal-actions">
+          <button id="btn-pair-invite-decline" class="btn btn-secondary" type="button">Để lúc khác</button>
+          <button id="btn-pair-invite-accept" class="btn btn-primary" type="button">💛 Vào trò chuyện ngay</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ Modal Phòng Hẹn Chờ Riêng (Đợi đối phương vào lại) ═══════ -->
+    <div id="modal-pair-waiting" class="modal hidden" role="dialog" aria-label="Phòng hẹn chờ gặp lại">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content pair-waiting-modal">
+        <div id="pair-wait-avatar" class="modal-header-icon primary">💛</div>
+        <h3 id="pair-wait-title">Đang chờ gặp lại…</h3>
+        <p id="pair-wait-desc" class="pair-wait-desc">Đang kết nối lại với người ấy…</p>
+
+        <div class="pair-wait-code-strip">
+          <span>Mã hẹn gặp lại:</span>
+          <button type="button" id="btn-copy-wait-pair-code" class="room-code-chip" title="Bấm để sao chép mã">
+            🔑 <span id="pair-wait-code-text">CHAT-XXXX-XXXX</span>
+          </button>
+        </div>
+
+        <div id="pair-wait-history-preview" class="pair-wait-history-preview hidden">
+          <!-- Xem lại vài tin nhắn gần nhất trong lúc chờ -->
+        </div>
+
+        <div class="modal-actions modal-actions-center">
+          <button id="btn-pair-cancel-wait" class="btn btn-secondary" type="button">✕ Hủy chờ</button>
         </div>
       </div>
     </div>

@@ -373,6 +373,39 @@ class Moderation {
 
     return { banned: false, remainingSec: 0, reason: '' };
   }
+
+  /**
+   * Dọn dẹp định kỳ các bản ghi hết hạn & giới hạn bộ nhớ tối đa (chống cạn kiệt RAM).
+   */
+  pruneExpired() {
+    const now = Date.now();
+    for (const [id, info] of this.bannedClients.entries()) {
+      if (now >= info.expiresAt) this.bannedClients.delete(id);
+    }
+    for (const [ip, info] of this.bannedIps.entries()) {
+      if (now >= info.expiresAt) this.bannedIps.delete(ip);
+    }
+    for (const [id, blocks] of this.blockMap.entries()) {
+      for (const [target, expireAt] of blocks.entries()) {
+        if (now > expireAt) blocks.delete(target);
+      }
+      if (blocks.size === 0) this.blockMap.delete(id);
+    }
+    for (const [id, tracker] of this.skipTracker.entries()) {
+      tracker.timestamps = tracker.timestamps.filter((t) => now - t < SKIP_WINDOW);
+      if (tracker.timestamps.length === 0 && now >= tracker.cooldownUntil) {
+        this.skipTracker.delete(id);
+      }
+    }
+    // Giới hạn kích thước tối đa để chống phình RAM khi bị spam kết nối
+    const MAX_ENTRIES = 10_000;
+    while (this.permanentBlocks.size > MAX_ENTRIES) {
+      this.permanentBlocks.delete(this.permanentBlocks.values().next().value);
+    }
+    while (this.permanentIpBlocks.size > MAX_ENTRIES) {
+      this.permanentIpBlocks.delete(this.permanentIpBlocks.values().next().value);
+    }
+  }
 }
 
 module.exports = Moderation;

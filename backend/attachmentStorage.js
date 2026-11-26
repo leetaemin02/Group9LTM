@@ -342,7 +342,9 @@ function createAttachmentStorage({
       }
       throw error;
     }
-    if (properties.contentLength !== claims.size || properties.contentType !== claims.contentType) {
+    const expectedType = claims.contentType.toLowerCase().replace(/\s+/g, '');
+    const actualType = String(properties.contentType || '').toLowerCase().replace(/\s+/g, '');
+    if (properties.contentLength !== claims.size || actualType !== expectedType) {
       throw new AttachmentError('Thông tin tệp lưu trữ không khớp.', 400);
     }
 
@@ -374,10 +376,221 @@ function createAttachmentStorage({
 
   return {
     enabled,
+    mode: enabled ? 'azure' : 'disabled',
     issueUploadTicket,
     validateTicket: verifyTicket,
     upload,
     completeUpload,
+  };
+}
+
+/**
+ * Bộ lưu tệp tạm an toàn trong RAM (chỉ dùng khi chạy cục bộ chưa cấu hình Azure Storage).
+ * Giữ nguyên toàn bộ kiểm duyệt định dạng, dung lượng, magic bytes và ký HMAC URL tải về.
+ */
+function createLocalAttachmentStorage({
+  tokenSecret = process.env.ATTACHMENT_TOKEN_SECRET || crypto.randomBytes(32).toString('base64url'),
+  maxTotalBytes = 100 * 1024 * 1024,
+  maxItems = 100,
+  now = Date.now,
+} = {}) {
+  const secret = Buffer.from(tokenSecret, 'utf8');
+  const files = new Map(); // uploadId -> { buffer, fileName, contentType, category, size, createdAt, expiresAt }
+
+  function prune(incomingBytes = 0) {
+    const currentTime = now();
+    let totalBytes = 0;
+    for (const [id, item] of files.entries()) {
+      if (item.expiresAt <= currentTime) {
+        files.delete(id);
+      } else {
+        totalBytes += item.size;
+      }
+    }
+    while (files.size > 0 && (files.size >= maxItems || totalBytes + incomingBytes > maxTotalBytes)) {
+      const oldestKey = files.keys().next().value;
+      const oldest = files.get(oldestKey);
+      totalBytes -= (oldest && oldest.size) || 0;
+      files.delete(oldestKey);
+    }
+  }
+
+  function signClaims(claims) {
+    const encoded = Buffer.from(JSON.stringify(claims)).toString('base64url');
+    const signature = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
+    return `${encoded}.${signature}`;
+  }
+
+  function signDownloadToken(uploadId, exp) {
+    return crypto.createHmac('sha256', secret).update(`download:${uploadId}:${exp}`).digest('base64url');
+  }
+
+  function verifyTicket(ticket, expectedUploadId) {
+    if (typeof ticket !== 'string' || ticket.length > 4096) {
+      throw new AttachmentError('Mã tải tệp không hợp lệ hoặc đã hết hạn.', 401);
+    }
+    const [encoded, suppliedSignature, extra] = ticket.split('.');
+    if (!encoded || !suppliedSignature || extra !== undefined) {
+      throw new AttachmentError('Mã tải tệp không hợp lệ.', 401);
+    }
+    const expectedSignature = crypto.createHmac('sha256', secret).update(encoded).digest();
+    let receivedSignature;
+    try {
+      receivedSignature = Buffer.from(suppliedSignature, 'base64url');
+    } catch {
+      throw new AttachmentError('Mã tải tệp không hợp lệ.', 401);
+    }
+    if (receivedSignature.length !== expectedSignature.length || !crypto.timingSafeEqual(receivedSignature, expectedSignature)) {
+      throw new AttachmentError('Mã tải tệp không hợp lệ.', 401);
+    }
+    let claims;
+    try {
+      claims = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    } catch {
+      throw new AttachmentError('Mã tải tệp không hợp lệ.', 401);
+    }
+    if (
+      (expectedUploadId && claims.uploadId !== expectedUploadId)
+      || !UUID_PATTERN.test(claims.uploadId)
+      || claims.expiresAt <= now()
+      || typeof claims.clientId !== 'string'
+      || typeof claims.partnerId !== 'string'
+      || (claims.conversationId !== null && typeof claims.conversationId !== 'string')
+    ) {
+      throw new AttachmentError('Mã tải tệp đã hết hạn hoặc không đúng phiên.', 401);
+    }
+    return claims;
+  }
+
+  function issueUploadTicket(clientId, partnerId, fileName, size, conversationId = null) {
+    const normalizedName = normalizeFileName(fileName);
+    const policy = getFilePolicy(normalizedName, size);
+    const uploadId = crypto.randomUUID();
+    const claims = {
+      uploadId,
+      clientId,
+      partnerId,
+      conversationId,
+      fileName: normalizedName,
+      contentType: policy.contentType,
+      category: policy.category,
+      size,
+      blobName: `local/${uploadId}`,
+      expiresAt: now() + UPLOAD_TICKET_TTL_MS,
+    };
+    return {
+      uploadId,
+      ticket: signClaims(claims),
+      uploadPath: `/api/attachments/${uploadId}`,
+      fileName: normalizedName,
+      contentType: policy.contentType,
+      category: policy.category,
+      size,
+      expiresAt: claims.expiresAt,
+    };
+  }
+
+  async function upload(uploadId, ticket, request) {
+    const claims = verifyTicket(ticket, uploadId);
+    if (files.has(uploadId)) {
+      request.resume();
+      throw new AttachmentError('Tệp này đã được tải lên trước đó.', 409);
+    }
+    const contentLength = Number(request.headers['content-length']);
+    if (!Number.isSafeInteger(contentLength) || contentLength !== claims.size) {
+      request.resume();
+      throw new AttachmentError('Kích thước tải lên không khớp với yêu cầu.');
+    }
+    const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (contentType !== claims.contentType.split(';')[0]) {
+      request.resume();
+      throw new AttachmentError('Loại nội dung tải lên không khớp.');
+    }
+
+    const chunks = [];
+    let byteCount = 0;
+    for await (const rawChunk of request) {
+      const chunk = Buffer.from(rawChunk);
+      byteCount += chunk.length;
+      if (byteCount > claims.size) {
+        chunks.length = 0;
+        throw new AttachmentError('Tệp vượt quá kích thước đã khai báo.');
+      }
+      chunks.push(chunk);
+    }
+    if (byteCount === 0) throw new AttachmentError('Tệp tải lên đang trống.');
+    if (byteCount !== claims.size) throw new AttachmentError('Kích thước tệp tải lên không chính xác.');
+
+    const buffer = Buffer.concat(chunks);
+    if (!hasExpectedSignature(claims.contentType.split(';')[0], buffer.subarray(0, 16))) {
+      throw new AttachmentError('Nội dung tệp không khớp với định dạng được chọn.');
+    }
+
+    prune(buffer.length);
+    const createdAt = now();
+    files.set(uploadId, {
+      buffer,
+      fileName: claims.fileName,
+      contentType: claims.contentType,
+      category: claims.category,
+      size: claims.size,
+      createdAt,
+      expiresAt: createdAt + DOWNLOAD_TTL_MS,
+    });
+    return { uploadId: claims.uploadId, size: claims.size };
+  }
+
+  async function completeUpload(clientId, ticket) {
+    const claims = verifyTicket(ticket);
+    if (claims.clientId !== clientId) {
+      throw new AttachmentError('Tệp này không thuộc phiên hiện tại.', 403);
+    }
+    const item = files.get(claims.uploadId);
+    if (!item || item.expiresAt <= now()) {
+      files.delete(claims.uploadId);
+      throw new AttachmentError('Tệp chưa tải lên hoàn tất hoặc đã hết hạn.', 409);
+    }
+    const exp = item.expiresAt;
+    const sig = signDownloadToken(claims.uploadId, exp);
+    return {
+      fileName: item.fileName,
+      contentType: item.contentType,
+      category: item.category,
+      size: item.size,
+      url: `/api/attachments/file/${claims.uploadId}?exp=${exp}&sig=${sig}`,
+      expiresAt: new Date(exp).toISOString(),
+    };
+  }
+
+  function getFile(uploadId, expParam, sigParam) {
+    if (!UUID_PATTERN.test(String(uploadId || ''))) return null;
+    const exp = Number(expParam);
+    if (!Number.isSafeInteger(exp) || exp <= now() || typeof sigParam !== 'string' || !sigParam) return null;
+    const expectedSig = signDownloadToken(uploadId, exp);
+    const a = Buffer.from(sigParam, 'utf8');
+    const b = Buffer.from(expectedSig, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+    const item = files.get(uploadId);
+    if (!item || item.expiresAt <= now()) {
+      files.delete(uploadId);
+      return null;
+    }
+    return {
+      ...item,
+      disposition: `${item.category === 'image' || item.category === 'video' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeFileName(item.fileName)}`,
+    };
+  }
+
+  return {
+    enabled: true,
+    mode: 'local',
+    issueUploadTicket,
+    validateTicket: verifyTicket,
+    upload,
+    completeUpload,
+    getFile,
+    prune,
   };
 }
 
@@ -386,6 +599,7 @@ module.exports = {
   MAX_FILE_BYTES,
   MAX_VIDEO_BYTES,
   createAttachmentStorage,
+  createLocalAttachmentStorage,
   getFilePolicy,
   hasExpectedSignature,
   normalizeFileName,
