@@ -672,9 +672,11 @@ const httpServer = http.createServer((req, res) => {
       }
       return;
     }
+    const isCodeAsset = ext === '.html' || ext === '.css' || ext === '.js';
     res.writeHead(200, {
       ...getSecurityHeaders({ isHtml: ext === '.html', isHttps }),
       'Content-Type': contentType,
+      'Cache-Control': isCodeAsset ? 'no-cache, must-revalidate' : 'public, max-age=86400',
     });
     res.end(data);
   });
