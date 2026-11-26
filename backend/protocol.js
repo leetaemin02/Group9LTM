@@ -781,11 +781,17 @@ function validatePayload(type, payload) {
           return { ok: false, error: `Tên phòng game tối đa ${MAX_GAME_ROOM_NAME_LENGTH} ký tự` };
         }
       }
+      const minAllowed = gameType === 'undercover' ? 3 : 2;
       let maxPlayers = 10;
       if (payload.maxPlayers !== undefined) {
         const parsedMax = Number(payload.maxPlayers);
-        if (!Number.isInteger(parsedMax) || parsedMax < 2 || parsedMax > 10) {
-          return { ok: false, error: 'Số người tối đa mỗi phòng game phải từ 2 đến 10' };
+        if (!Number.isInteger(parsedMax) || parsedMax < minAllowed || parsedMax > 10) {
+          return {
+            ok: false,
+            error: gameType === 'undercover'
+              ? 'Trò chơi "Ai Là Gián Điệp?" yêu cầu số người tối đa từ 3 đến 10'
+              : 'Số người tối đa mỗi phòng game phải từ 2 đến 10',
+          };
         }
         maxPlayers = parsedMax;
       }

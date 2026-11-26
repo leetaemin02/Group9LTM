@@ -278,6 +278,31 @@ class GameRoomManager {
     };
   }
 
+  _getPhaseDurationMs(g) {
+    if (!g) return null;
+    switch (g.gameType) {
+      case 'quiz_race':
+        if (g.phase === 'question') return this.timings.quizQuestionMs;
+        if (g.phase === 'reveal') return this.timings.quizRevealMs;
+        return null;
+      case 'word_chain':
+        return g.phase === 'playing' ? this.timings.wordChainTurnMs : null;
+      case 'undercover':
+        if (g.phase === 'clue') return this.timings.undercoverClueMs;
+        if (g.phase === 'vote') return this.timings.undercoverVoteMs;
+        if (g.phase === 'round_result') return this.timings.undercoverResultMs;
+        return null;
+      case 'mind_duel':
+        if (g.phase === 'choose') return this.timings.mindDuelChooseMs;
+        if (g.phase === 'reveal') return this.timings.mindDuelRevealMs;
+        return null;
+      case 'caro_arena':
+        return g.phase === 'playing' ? this.timings.caroMoveMs : null;
+      default:
+        return null;
+    }
+  }
+
   _serializePublicGameState(room) {
     const g = room.game;
     if (!g) {
@@ -286,6 +311,13 @@ class GameRoomManager {
         phase: 'lobby',
       };
     }
+
+    const now = Date.now();
+    const timerMeta = {
+      endsAt: g.endsAt || null,
+      remainingMs: g.endsAt ? Math.max(0, g.endsAt - now) : null,
+      durationMs: g.endsAt ? this._getPhaseDurationMs(g) : null,
+    };
 
     switch (g.gameType) {
       case 'quiz_race': {
@@ -297,7 +329,7 @@ class GameRoomManager {
           questionToken: `${g.matchId || 'q'}:${g.currentIndex}`,
           currentIndex: g.currentIndex,
           totalQuestions: g.questions.length,
-          endsAt: g.endsAt || null,
+          ...timerMeta,
           question: currentQ ? {
             q: currentQ.q,
             options: currentQ.options,
@@ -322,7 +354,7 @@ class GameRoomManager {
           maxChainLength: g.maxChainLength,
           turnClientId: g.turnClientId,
           turnNickname: room.players.get(g.turnClientId)?.nickname || '',
-          endsAt: g.endsAt || null,
+          ...timerMeta,
           lives: Object.fromEntries(g.lives),
           eliminatedIds: [...g.eliminated],
           lastEvent: g.lastEvent || null,
@@ -351,7 +383,7 @@ class GameRoomManager {
           submittedClueIds: [...g.clues.keys()],
           clues: revealedClues,
           votedIds: [...g.votes.keys()],
-          endsAt: g.endsAt || null,
+          ...timerMeta,
           lastElimination: g.lastElimination || null,
           winnerSide: g.phase === 'ended' ? g.winnerSide : null,
           revealSecret: g.phase === 'ended' ? {
@@ -379,7 +411,7 @@ class GameRoomManager {
           totalRounds: g.totalRounds,
           multiplier: g.round === g.totalRounds ? 2 : 1,
           isDoubleRound: g.round === g.totalRounds,
-          endsAt: g.endsAt || null,
+          ...timerMeta,
           lockedIds,
           lockedCount: lockedIds.length,
           roundResults: g.phase === 'reveal' ? (g.lastRoundResults || []) : [],
@@ -402,7 +434,7 @@ class GameRoomManager {
           oPlayer: g.oPlayer,
           oNickname: room.players.get(g.oPlayer)?.nickname || g.oNickname || 'O',
           turn: g.turn,
-          endsAt: g.endsAt || null,
+          ...timerMeta,
           lastMove: g.lastMove,
           winner: g.winner,
           winnerId: g.winnerId,
@@ -551,12 +583,13 @@ class GameRoomManager {
 
   createRoom(user, options = {}) {
     const gameType = VALID_GAME_TYPES.includes(options.gameType) ? options.gameType : 'quiz_race';
-    const requestedMax = Number(options.maxPlayers);
-    const maxPlayers = (Number.isSafeInteger(requestedMax) && requestedMax >= 2 && requestedMax <= this.maxPlayers)
-      ? requestedMax
-      : this.maxPlayers;
-
     const info = GAME_CATALOG[gameType];
+    const minAllowed = info.minPlayers || MIN_GAME_ROOM_PLAYERS;
+    const requestedMax = Number(options.maxPlayers);
+    const maxPlayers = (Number.isSafeInteger(requestedMax) && requestedMax >= minAllowed && requestedMax <= this.maxPlayers)
+      ? requestedMax
+      : Math.max(minAllowed, Math.min(this.maxPlayers, Number.isSafeInteger(requestedMax) ? requestedMax : this.maxPlayers));
+
     const roomId = uuidv4();
     let roomCode = generateRoomCode();
     while (this.codeToRoomId.has(roomCode)) {
@@ -779,6 +812,13 @@ class GameRoomManager {
       return { ok: false, error: 'Chỉ chủ phòng mới có thể đổi trò chơi.' };
     }
     if (!VALID_GAME_TYPES.includes(gameType)) return { ok: false, error: 'Trò chơi không hợp lệ.' };
+    const nextInfo = GAME_CATALOG[gameType];
+    if (room.maxPlayers < nextInfo.minPlayers) {
+      return {
+        ok: false,
+        error: `Phòng này giới hạn tối đa ${room.maxPlayers} người, không đủ cho "${nextInfo.name}" (cần tối thiểu ${nextInfo.minPlayers} người).`,
+      };
+    }
     if (room.status === 'playing' && room.game && room.game.phase !== 'ended') {
       return { ok: false, error: 'Hãy kết thúc ván hiện tại trước khi đổi game.' };
     }

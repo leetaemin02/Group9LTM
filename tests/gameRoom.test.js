@@ -27,7 +27,7 @@ const {
   GAME_CATALOG,
   MAX_GAME_ROOM_PLAYERS,
 } = require('../backend/gameRoomManager');
-const { CLIENT_TYPES, SERVER_TYPES } = require('../backend/protocol');
+const { CLIENT_TYPES, SERVER_TYPES, validatePayload } = require('../backend/protocol');
 
 function makeUser(idx, nickname = `Người chơi ${idx}`, avatar = '🦊') {
   return {
@@ -241,6 +241,11 @@ function runGameRoomManagerUnitTests() {
   const pubQuizBefore = mgr._serializePublicGameState(quizRoom);
   assert.strictEqual(pubQuizBefore.phase, 'question');
   assert.strictEqual(pubQuizBefore.correctIndex, null, 'Correct index MUST stay hidden during question phase');
+  assert.strictEqual(pubQuizBefore.durationMs, 30_000, 'Quiz question must expose phase durationMs for countdown progress');
+  assert.ok(
+    typeof pubQuizBefore.remainingMs === 'number' && pubQuizBefore.remainingMs > 0 && pubQuizBefore.remainingMs <= 30_000,
+    'Quiz question must expose server-computed remainingMs'
+  );
 
   const correctAnswer = quizRoom.game.questions[0].answer;
   for (let i = 1; i <= 10; i++) {
@@ -295,6 +300,24 @@ function runGameRoomManagerUnitTests() {
   mgr.leaveRoom('client-22');
 
   // 3D. Game 3: undercover (Ai Là Gián Điệp? – 3–10 người, bí mật từ khóa)
+  // Không cho phép tạo phòng Gián Điệp với maxPlayers = 2 (ở cả protocol lẫn manager) và không cho đổi phòng 2 người sang Gián Điệp
+  assert.strictEqual(
+    validatePayload(CLIENT_TYPES.GAME_ROOM_CREATE, { gameType: 'undercover', maxPlayers: 2 }).ok,
+    false,
+    'Protocol must reject undercover room with maxPlayers < 3'
+  );
+  assert.strictEqual(
+    validatePayload(CLIENT_TYPES.GAME_ROOM_CREATE, { gameType: 'undercover', maxPlayers: 3 }).ok,
+    true,
+    'Protocol must accept undercover room with maxPlayers = 3'
+  );
+  const clampedUc = mgr.createRoom(makeUser(30, 'CheckMin'), { gameType: 'undercover', maxPlayers: 2 });
+  assert.strictEqual(clampedUc.room.maxPlayers, 3, 'GameRoomManager must never create undercover room with maxPlayers < 3');
+  mgr.leaveRoom('client-30');
+  const twoPlayerQuiz = mgr.createRoom(makeUser(30, 'TwoOnly'), { gameType: 'quiz_race', maxPlayers: 2 });
+  assert.strictEqual(mgr.selectGame('client-30', 'undercover').ok, false, 'Must block switching a 2-player room to undercover');
+  mgr.leaveRoom('client-30');
+
   privates.length = 0;
   const ucCreate = mgr.createRoom(makeUser(31, 'Sói'), { gameType: 'undercover' });
   mgr.joinRoom(makeUser(32, 'Thỏ'), { roomId: ucCreate.room.roomId });
@@ -360,6 +383,11 @@ function runGameRoomManagerUnitTests() {
   const mdPublicChoosing = mgr._serializePublicGameState(mdRoom);
   assert.strictEqual(mdPublicChoosing.lockedCount, 1);
   assert.strictEqual(mdPublicChoosing.roundResults.length, 0, 'Choices must stay secret until reveal');
+  assert.strictEqual(mdPublicChoosing.durationMs, 30_000, 'Mind Duel choose phase must expose durationMs');
+  assert.ok(
+    typeof mdPublicChoosing.remainingMs === 'number' && mdPublicChoosing.remainingMs > 0 && mdPublicChoosing.remainingMs <= 30_000,
+    'Mind Duel choose phase must expose server-computed remainingMs'
+  );
 
   // Người 2 chọn Tích Lũy (cược 20) -> tự lật bài! Tấn Công cướp kho: +50 (150), Tích Lũy mất -30 (70)
   assert.strictEqual(mgr.handleAction('client-42', { action: 'pick_card', card: 'charge', stake: 20 }).ok, true);

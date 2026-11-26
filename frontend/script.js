@@ -188,6 +188,10 @@ const el = {
   multiGameModeBadge: $('#multi-game-mode-badge'),
   multiGameCountPill: $('#multi-game-count-pill'),
   multiGameTimerPill: $('#multi-game-timer-pill'),
+  multiGameCountdownBar: $('#multi-game-countdown-bar'),
+  multiGameCountdownLabel: $('#multi-game-countdown-label'),
+  multiGameCountdownValue: $('#multi-game-countdown-value'),
+  multiGameCountdownFill: $('#multi-game-countdown-fill'),
   btnMultiGameSeat: $('#btn-multi-game-seat'),
   btnMultiGameStart: $('#btn-multi-game-start'),
   btnMultiGameLobby: $('#btn-multi-game-lobby'),
@@ -396,6 +400,11 @@ let myMindDuelStake = 20;
 let myMindDuelRoundToken = null;
 let myUndercoverVote = null;
 let multiGameCountdownTimer = null;
+let multiGameCountdownKey = null;
+let multiGameCountdownLocalEndsAt = 0;
+let multiGameCountdownDurationMs = 1000;
+let multiGameCountdownMeta = null;
+let multiGameCountdownLastSec = null;
 
 let mentionOpen = false;
 let mentionCandidates = [];
@@ -5559,29 +5568,160 @@ function stopMultiGameCountdown() {
     clearInterval(multiGameCountdownTimer);
     multiGameCountdownTimer = null;
   }
+  multiGameCountdownKey = null;
+  multiGameCountdownLocalEndsAt = 0;
+  multiGameCountdownDurationMs = 1000;
+  multiGameCountdownMeta = null;
+  multiGameCountdownLastSec = null;
   if (el.multiGameTimerPill) {
     el.multiGameTimerPill.classList.add('hidden');
     el.multiGameTimerPill.classList.remove('urgent');
   }
+  if (el.multiGameCountdownBar) {
+    el.multiGameCountdownBar.classList.add('hidden');
+    el.multiGameCountdownBar.classList.remove('is-urgent', 'is-intermission');
+  }
+  if (el.multiGameCountdownValue) {
+    el.multiGameCountdownValue.classList.remove('tick-pop');
+  }
 }
 
-function syncMultiGameCountdown(endsAt) {
-  stopMultiGameCountdown();
-  if (!endsAt || !el.multiGameTimerPill) return;
+function getMultiGameCountdownMeta(gs) {
+  if (!gs) return { label: '⏱️ Thời gian còn lại', urgentLabel: '🔥 Sắp hết giờ!', isIntermission: false };
+  const phase = gs.phase;
+  const isIntermission = phase === 'reveal' || phase === 'round_result';
 
-  const updateTick = () => {
-    const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
-    el.multiGameTimerPill.textContent = `⏱️ ${remaining}s`;
-    el.multiGameTimerPill.classList.remove('hidden');
-    el.multiGameTimerPill.classList.toggle('urgent', remaining <= 5);
-    if (remaining <= 0) {
-      clearInterval(multiGameCountdownTimer);
-      multiGameCountdownTimer = null;
+  if (gs.gameType === 'quiz_race') {
+    return phase === 'reveal'
+      ? { label: '⏳ Câu tiếp theo sau…', urgentLabel: '⏳ Câu tiếp theo sau…', isIntermission: true }
+      : { label: '⏱️ Thời gian trả lời', urgentLabel: '🔥 Sắp hết giờ — chọn đáp án ngay!', isIntermission: false };
+  }
+  if (gs.gameType === 'word_chain') {
+    const isMine = gs.turnClientId === clientId;
+    return {
+      label: isMine ? '⏱️ Thời gian lượt của BẠN' : `⏱️ Thời gian lượt ${gs.turnNickname || 'đối thủ'}`,
+      urgentLabel: isMine ? '🔥 Sắp hết giờ — nối từ ngay!' : '🔥 Sắp hết giờ lượt này!',
+      isIntermission: false,
+    };
+  }
+  if (gs.gameType === 'undercover') {
+    if (phase === 'clue') return { label: '⏱️ Thời gian gửi gợi ý', urgentLabel: '🔥 Sắp hết giờ gửi gợi ý!', isIntermission: false };
+    if (phase === 'vote') return { label: '⏱️ Thời gian bỏ phiếu', urgentLabel: '🔥 Sắp hết giờ bỏ phiếu!', isIntermission: false };
+    return { label: '⏳ Sang vòng tiếp theo sau…', urgentLabel: '⏳ Sang vòng tiếp theo sau…', isIntermission: true };
+  }
+  if (gs.gameType === 'mind_duel') {
+    return phase === 'reveal'
+      ? { label: '⏳ Vòng tiếp theo sau…', urgentLabel: '⏳ Vòng tiếp theo sau…', isIntermission: true }
+      : { label: '⏱️ Thời gian chọn bài & cược', urgentLabel: '🔥 Sắp hết giờ — chốt lá bài ngay!', isIntermission: false };
+  }
+  if (gs.gameType === 'caro_arena') {
+    const isMine = gs.turn === clientId;
+    return {
+      label: isMine ? '⏱️ Thời gian lượt đánh của BẠN' : '⏱️ Thời gian nước đi hiện tại',
+      urgentLabel: isMine ? '🔥 Sắp hết giờ — đánh cờ ngay!' : '🔥 Sắp hết giờ lượt này!',
+      isIntermission: false,
+    };
+  }
+  return { label: '⏱️ Thời gian còn lại', urgentLabel: '🔥 Sắp hết giờ!', isIntermission };
+}
+
+function renderMultiGameCountdownTick() {
+  const remainingMs = Math.max(0, multiGameCountdownLocalEndsAt - Date.now());
+  const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+  const ratio = Math.max(0, Math.min(100, (remainingMs / multiGameCountdownDurationMs) * 100));
+  const meta = multiGameCountdownMeta || getMultiGameCountdownMeta(null);
+  const isUrgent = !meta.isIntermission && remainingSec > 0 && remainingSec <= 5;
+  const secondChanged = multiGameCountdownLastSec !== remainingSec;
+
+  if (el.multiGameCountdownBar) {
+    el.multiGameCountdownBar.classList.remove('hidden');
+    el.multiGameCountdownBar.classList.toggle('is-intermission', meta.isIntermission);
+    el.multiGameCountdownBar.classList.toggle('is-urgent', isUrgent);
+
+    if (el.multiGameCountdownLabel) {
+      el.multiGameCountdownLabel.textContent = isUrgent ? meta.urgentLabel : meta.label;
     }
-  };
+    if (el.multiGameCountdownValue) {
+      el.multiGameCountdownValue.textContent = `${remainingSec}s`;
+      if (secondChanged) {
+        if (isUrgent) {
+          el.multiGameCountdownValue.classList.remove('tick-pop');
+          // Trigger reflow nhẹ để phát lại hiệu ứng nảy số mỗi giây trong 5 giây cuối
+          void el.multiGameCountdownValue.offsetWidth;
+          el.multiGameCountdownValue.classList.add('tick-pop');
+          playTone(remainingSec === 1 ? 880 : 660, 'sine', 0.055, 0.05);
+        } else {
+          el.multiGameCountdownValue.classList.remove('tick-pop');
+        }
+      }
+    }
+    if (el.multiGameCountdownFill) {
+      el.multiGameCountdownFill.style.width = `${ratio.toFixed(1)}%`;
+    }
+  } else if (el.multiGameTimerPill) {
+    el.multiGameTimerPill.textContent = `⏱️ ${remainingSec}s`;
+    el.multiGameTimerPill.classList.remove('hidden');
+    el.multiGameTimerPill.classList.toggle('urgent', isUrgent);
+  }
 
-  updateTick();
-  multiGameCountdownTimer = setInterval(updateTick, 500);
+  multiGameCountdownLastSec = remainingSec;
+
+  if (remainingMs <= 0 && multiGameCountdownTimer) {
+    clearInterval(multiGameCountdownTimer);
+    multiGameCountdownTimer = null;
+  }
+}
+
+function syncMultiGameCountdown(gs) {
+  if (!gs) {
+    stopMultiGameCountdown();
+    return;
+  }
+
+  const hasRemaining = typeof gs.remainingMs === 'number' && Number.isFinite(gs.remainingMs);
+  const hasEndsAt = typeof gs.endsAt === 'number' && Number.isFinite(gs.endsAt);
+  if (!hasRemaining && !hasEndsAt) {
+    stopMultiGameCountdown();
+    return;
+  }
+
+  // Dùng remainingMs từ server để miễn nhiễm tuyệt đối với lệch đồng hồ giữa máy người dùng và server
+  const initialRemainingMs = hasRemaining
+    ? Math.max(0, gs.remainingMs)
+    : Math.max(0, gs.endsAt - Date.now());
+  if (initialRemainingMs <= 0) {
+    stopMultiGameCountdown();
+    return;
+  }
+
+  const nextLocalEndsAt = Date.now() + initialRemainingMs;
+  const nextDurationMs = Math.max(
+    initialRemainingMs,
+    (typeof gs.durationMs === 'number' && gs.durationMs > 0) ? gs.durationMs : initialRemainingMs,
+    1000
+  );
+  const nextMeta = getMultiGameCountdownMeta(gs);
+  const timerKey = `${gs.gameType || ''}:${gs.phase || ''}:${hasEndsAt ? gs.endsAt : ''}`;
+
+  // Nếu cùng một bộ đếm đang chạy (ví dụ khi người chơi khác gửi đáp án giữa hiệp), giữ mượt thanh tiến độ & không phát lại tiếng bíp
+  if (multiGameCountdownTimer && multiGameCountdownKey === timerKey && hasEndsAt) {
+    multiGameCountdownMeta = nextMeta;
+    multiGameCountdownDurationMs = Math.max(multiGameCountdownDurationMs, nextDurationMs);
+    if (Math.abs(nextLocalEndsAt - multiGameCountdownLocalEndsAt) > 350) {
+      multiGameCountdownLocalEndsAt = nextLocalEndsAt;
+    }
+    renderMultiGameCountdownTick();
+    return;
+  }
+
+  stopMultiGameCountdown();
+  multiGameCountdownKey = timerKey;
+  multiGameCountdownLocalEndsAt = nextLocalEndsAt;
+  multiGameCountdownDurationMs = nextDurationMs;
+  multiGameCountdownMeta = nextMeta;
+
+  renderMultiGameCountdownTick();
+  multiGameCountdownTimer = setInterval(renderMultiGameCountdownTick, 100);
 }
 
 function exitGameRoomUiToLogin() {
@@ -6079,13 +6219,14 @@ function updateGameRoomHeaderAndArena() {
   if (el.multiGameSwitcher) {
     el.multiGameSwitcher.classList.toggle('hidden', !canControl || !inLobbyOrEnded);
     el.multiGameSwitcher.querySelectorAll('.mini-game-chip').forEach((chip) => {
-      const isUndercover1v1 = is1v1Embedded && chip.dataset.game === 'undercover';
-      chip.classList.toggle('hidden', isUndercover1v1);
+      const isUndercoverBlocked = chip.dataset.game === 'undercover'
+        && (is1v1Embedded || (arenaRoom.maxPlayers || 10) < 3);
+      chip.classList.toggle('hidden', isUndercoverBlocked);
       chip.classList.toggle('active', chip.dataset.game === arenaRoom.gameType);
     });
   }
 
-  syncMultiGameCountdown(gs.endsAt || null);
+  syncMultiGameCountdown(gs);
   renderGameRoomPlayersStrip();
   renderMultiGameArenaBody();
 }
@@ -6163,6 +6304,38 @@ function renderPodiumBlock(podium = []) {
   return wrap;
 }
 
+function copyGameRoomCode(code) {
+  if (!code) return;
+
+  const showCopied = () => {
+    showToast(`Đã sao chép mã phòng: ${code}`, 'success', 2000);
+  };
+  const showFallback = () => {
+    showToast(`Mã phòng game: ${code}`, 'info', 2500);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code).then(showCopied).catch(() => {
+      showFallback();
+    });
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = code;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand('copy') ? showCopied() : showFallback();
+  } catch {
+    showFallback();
+  }
+  textarea.remove();
+}
+
 function renderMultiGameArenaBody() {
   const arenaRoom = getActiveArenaRoom();
   const arenaPlayers = getActiveArenaPlayers();
@@ -6194,7 +6367,7 @@ function renderMultiGameArenaBody() {
     readyText.style.fontWeight = '700';
     if (need > 0) {
       readyText.textContent = isGameRoomMode
-        ? `⏳ Đang có ${arenaRoom.playerCount}/${arenaRoom.maxPlayers} người — cần thêm ${need} người nữa để bắt đầu (chia sẻ mã phòng ${arenaRoom.roomCode} hoặc đợi người chơi mới vào).`
+        ? `⏳ Đang có ${arenaRoom.playerCount}/${arenaRoom.maxPlayers} người — cần thêm ${need} người nữa để bắt đầu.`
         : `⏳ Đang có ${arenaRoom.playerCount}/${arenaRoom.maxPlayers} người ngồi bàn — cần thêm ${need} người bấm "🙋 Tham gia" để bắt đầu!`;
     } else if (canControl) {
       readyText.textContent = `✅ Đã đủ người chơi (${arenaRoom.playerCount}/${arenaRoom.maxPlayers})! Bấm "▶ Bắt đầu" ở góc trên hoặc đổi game khác nhé!`;
@@ -6208,6 +6381,22 @@ function renderMultiGameArenaBody() {
     box.appendChild(h3);
     box.appendChild(desc);
     box.appendChild(readyText);
+
+    if (isGameRoomMode && arenaRoom.roomCode) {
+      const codeCard = document.createElement('button');
+      codeCard.type = 'button';
+      codeCard.className = 'arena-room-code-card';
+      codeCard.title = 'Bấm để sao chép mã phòng';
+      codeCard.setAttribute('aria-label', `Mã phòng ${arenaRoom.roomCode}. Bấm để sao chép`);
+      codeCard.innerHTML = `
+        <span class="arena-room-code-label">Mã phòng</span>
+        <span class="arena-room-code-value">${escapeHtml(arenaRoom.roomCode)}</span>
+        <span class="arena-room-code-copy">📋 Sao chép</span>
+      `;
+      codeCard.addEventListener('click', () => copyGameRoomCode(arenaRoom.roomCode));
+      box.appendChild(codeCard);
+    }
+
     el.multiGameArenaBody.appendChild(box);
     return;
   }
@@ -6872,8 +7061,25 @@ function renderGameRoomBrowseList(rooms, maxPlayers = 10) {
 }
 
 // ── Event Listeners cho Phòng Game Nhiều Người ─────────────
+function syncGameHubMaxPlayersForType(gameType) {
+  if (!el.selectGameMaxPlayers) return;
+  const minPlayers = gameType === 'undercover' ? 3 : 2;
+  const opt2 = el.selectGameMaxPlayers.querySelector('option[value="2"]');
+  if (opt2) {
+    opt2.disabled = minPlayers > 2;
+    opt2.hidden = minPlayers > 2;
+  }
+  const currentVal = parseInt(el.selectGameMaxPlayers.value, 10);
+  if (Number.isInteger(currentVal) && currentVal < minPlayers) {
+    el.selectGameMaxPlayers.value = String(minPlayers);
+  }
+}
+
 if (el.btnOpenGameHub) {
-  el.btnOpenGameHub.addEventListener('click', () => openGameHub('play'));
+  el.btnOpenGameHub.addEventListener('click', () => {
+    syncGameHubMaxPlayersForType(selectedHubGameType);
+    openGameHub('play');
+  });
 }
 if (el.btnCloseGameHub) {
   el.btnCloseGameHub.addEventListener('click', closeGameHub);
@@ -6897,6 +7103,7 @@ if (el.gameCatalogGrid) {
     el.gameCatalogGrid.querySelectorAll('.game-choice-card').forEach((c) => {
       c.classList.toggle('active', c === card);
     });
+    syncGameHubMaxPlayersForType(selectedHubGameType);
     playTone(560, 'sine', 0.04, 0.05);
   });
 }
@@ -6911,6 +7118,12 @@ if (el.btnGameRoomCreate) {
     collectLobbyProfileForGroup();
     const name = el.inputGameRoomName ? el.inputGameRoomName.value.trim() : '';
     const maxPlayers = el.selectGameMaxPlayers ? parseInt(el.selectGameMaxPlayers.value, 10) : 10;
+    const minAllowed = selectedHubGameType === 'undercover' ? 3 : 2;
+    if (Number.isInteger(maxPlayers) && maxPlayers < minAllowed) {
+      syncGameHubMaxPlayersForType(selectedHubGameType);
+      showToast('🕵️ Trò chơi "Ai Là Gián Điệp?" cần phòng tối thiểu 3 người!', 'warning', 3600);
+      return;
+    }
     send('game_room_create', {
       gameType: selectedHubGameType,
       name,
@@ -6947,15 +7160,7 @@ if (el.btnRefreshGameRooms) {
 if (el.btnCopyGameCode) {
   el.btnCopyGameCode.addEventListener('click', () => {
     if (!currentGameRoom || !currentGameRoom.roomCode) return;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(currentGameRoom.roomCode).then(() => {
-        showToast(`Đã sao chép mã phòng: ${currentGameRoom.roomCode}`, 'success', 2000);
-      }).catch(() => {
-        showToast(`Mã phòng game: ${currentGameRoom.roomCode}`, 'info', 2500);
-      });
-    } else {
-      showToast(`Mã phòng game: ${currentGameRoom.roomCode}`, 'info', 2500);
-    }
+    copyGameRoomCode(currentGameRoom.roomCode);
   });
 }
 if (el.btnMultiGameSeat) {
