@@ -5540,31 +5540,253 @@ body {
   line-height: 1.4;
 }
 
-/* Number Bomb */
-.bomb-range-display {
-  background: var(--bg-panel-inner);
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-xl);
-  padding: 18px 16px;
+/* Mind Duel (Đấu Trí Tâm Lý) */
+.arena-status-banner.mind-duel-double {
+  background: linear-gradient(135deg, rgba(251, 146, 60, 0.2), rgba(239, 68, 68, 0.18));
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.mind-duel-rule-bar {
   text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--bg-panel-inner);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+}
+
+.mind-duel-stake-row {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mind-duel-stake-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.mind-duel-stake-chip {
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-panel-inner);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.mind-duel-stake-chip:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.mind-duel-stake-chip.active {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.mind-duel-stake-chip:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.mind-duel-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.bomb-range-numbers {
-  font-family: var(--font-mono);
-  font-size: 2rem;
-  font-weight: 800;
-  color: var(--accent-primary);
-  letter-spacing: 0.04em;
+.mind-duel-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 13px 12px;
+  border-radius: var(--radius-lg);
+  border: 1.5px solid var(--border-medium);
+  background: var(--bg-panel-inner);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
-.bomb-quick-picks {
+.mind-duel-card:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.mind-duel-card.card-attack:hover:not(:disabled),
+.mind-duel-card.card-attack.selected {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.14);
+}
+
+.mind-duel-card.card-shield:hover:not(:disabled),
+.mind-duel-card.card-shield.selected {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.mind-duel-card.card-bluff:hover:not(:disabled),
+.mind-duel-card.card-bluff.selected {
+  border-color: #c084fc;
+  background: rgba(192, 132, 252, 0.14);
+}
+
+.mind-duel-card.card-charge:hover:not(:disabled),
+.mind-duel-card.card-charge.selected {
+  border-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.14);
+}
+
+.mind-duel-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.mind-duel-card.selected:disabled {
+  opacity: 1;
+}
+
+.mind-duel-card-top {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+}
+
+.mind-duel-card-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.mind-duel-card-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.38;
+}
+
+.mind-duel-locked-tag {
+  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: var(--bg-card-solid);
+  border: 1px solid var(--border-medium);
+  color: var(--text-primary);
+}
+
+.mind-duel-reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.mind-duel-reveal-card {
+  background: var(--bg-panel-inner);
+  border: 1.5px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mind-duel-reveal-card.is-me {
+  border-color: var(--accent-primary);
+}
+
+.mind-duel-reveal-card.win {
+  background: rgba(52, 211, 153, 0.1);
+  border-color: var(--success);
+}
+
+.mind-duel-reveal-card.lose {
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.mind-duel-reveal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.mind-duel-delta {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.mind-duel-delta.pos { color: var(--success); }
+.mind-duel-delta.neg { color: var(--danger); }
+.mind-duel-delta.flat { color: var(--text-muted); }
+
+.mind-duel-reveal-play {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mind-duel-reveal-outcome {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.mind-duel-history {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--bg-panel-inner);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 8px 10px;
+}
+
+.mind-duel-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.mind-duel-history-round {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-solid);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.7rem;
+  color: var(--text-primary);
+}
+
+.mind-duel-history-entries {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Podium */

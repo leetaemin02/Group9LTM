@@ -26,6 +26,8 @@ x-chat-common: &chat-common
     ATTACHMENT_TOKEN_SECRET: "${ATTACHMENT_TOKEN_SECRET:-}"
     SKIP_MALWARE_SCAN: "${SKIP_MALWARE_SCAN:-true}"
     GROQ_API_KEY: "${GROQ_API_KEY:-}"
+    XAI_API_KEY: "${XAI_API_KEY:-}"
+    GROK_API_KEY: "${GROK_API_KEY:-}"
     GOOGLE_SAFE_BROWSING_API_KEY: "${GOOGLE_SAFE_BROWSING_API_KEY:-}"
     # Không đặt NODE_ENV=production khi demo: chế độ đó bật DISALLOW_SAME_DEVICE,
     # khiến 2 tab cùng trình duyệt không thể ghép cặp với nhau.

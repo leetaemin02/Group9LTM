@@ -13,7 +13,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=20261126-2" />
+  <link rel="stylesheet" href="style.css?v=20261126-4" />
 </head>
 
 <body>
@@ -435,7 +435,7 @@
                   <span class="action-icon">🎲</span> <span class="action-label">Gợi ý bắt chuyện</span>
                 </button>
                 <button id="btn-minigame" class="btn btn-action-game btn-small"
-                  title="Mở kho trò chơi ngay trong cuộc trò chuyện (Đố vui, Nối từ, Bom số, Caro, Gián điệp)">
+                  title="Mở kho trò chơi ngay trong cuộc trò chuyện (Đố vui, Nối từ, Đấu trí tâm lý, Caro, Gián điệp)">
                   <span class="action-icon">🎮</span> <span id="btn-minigame-label" class="action-label">Chơi Game</span>
                 </button>
               </div>
@@ -798,7 +798,7 @@
             <button type="button" class="mini-game-chip" data-game="quiz_race">⚡ Đố vui</button>
             <button type="button" class="mini-game-chip" data-game="word_chain">⛓️ Nối từ</button>
             <button type="button" class="mini-game-chip" data-game="undercover">🕵️ Gián điệp</button>
-            <button type="button" class="mini-game-chip" data-game="number_bomb">💣 Bom số</button>
+            <button type="button" class="mini-game-chip" data-game="mind_duel">🃏 Đấu trí</button>
             <button type="button" class="mini-game-chip" data-game="caro_arena">⚔️ Caro</button>
           </div>
 
@@ -869,10 +869,10 @@
             <strong>Nối Từ Thần Tốc</strong>
             <small>2–10 người • Nối từ 2 tiếng siêu kịch tính</small>
           </button>
-          <button type="button" class="game-choice-card" data-pick-game="number_bomb">
-            <span class="game-choice-icon">💣</span>
-            <strong>Đặt Bom Số</strong>
-            <small>2–10 người • Thu hẹp 1–100 né bom</small>
+          <button type="button" class="game-choice-card" data-pick-game="mind_duel">
+            <span class="game-choice-icon">🃏</span>
+            <strong>Đấu Trí Tâm Lý</strong>
+            <small>2–10 người • Cược điểm &amp; lật bài đọc vị</small>
           </button>
           <button type="button" class="game-choice-card" data-pick-game="caro">
             <span class="game-choice-icon">⚔️</span>
@@ -1102,10 +1102,10 @@
               <strong>Ai Là Gián Điệp?</strong>
               <small>Mô tả từ bí mật, tranh luận tag @ và bỏ phiếu tìm gián điệp!</small>
             </button>
-            <button type="button" class="game-choice-card" data-game="number_bomb">
-              <div class="game-choice-top"><span class="game-choice-icon">💣</span><span class="game-choice-cap">2–10 người</span></div>
-              <strong>Đặt Bom Số</strong>
-              <small>Thu hẹp khoảng số 1–100 để né quả bom ẩn siêu kịch tính!</small>
+            <button type="button" class="game-choice-card" data-game="mind_duel">
+              <div class="game-choice-top"><span class="game-choice-icon">🃏</span><span class="game-choice-cap">2–10 người</span></div>
+              <strong>Đấu Trí Tâm Lý</strong>
+              <small>Chọn lá bài kín (Tấn Công • Lá Chắn • Lừa Đòn • Tích Lũy) &amp; cược điểm, vòng cuối x2 cực căng!</small>
             </button>
             <button type="button" class="game-choice-card" data-game="caro_arena">
               <div class="game-choice-top"><span class="game-choice-icon">⚔️</span><span class="game-choice-cap">2–10 người</span></div>
@@ -1155,7 +1155,7 @@
               <button type="button" class="filter-pill" data-game="quiz_race">⚡ Đố vui</button>
               <button type="button" class="filter-pill" data-game="word_chain">⛓️ Nối từ</button>
               <button type="button" class="filter-pill" data-game="undercover">🕵️ Gián điệp</button>
-              <button type="button" class="filter-pill" data-game="number_bomb">💣 Bom số</button>
+              <button type="button" class="filter-pill" data-game="mind_duel">🃏 Đấu trí</button>
               <button type="button" class="filter-pill" data-game="caro_arena">⚔️ Caro</button>
             </div>
             <div class="group-browse-search-row">
@@ -1251,7 +1251,7 @@
     <div id="toast-container" class="toast-container"></div>
   </div>
 
-  <script src="script.js?v=20261126-2"></script>
+  <script src="script.js?v=20261126-4"></script>
 </body>
 
 </html>

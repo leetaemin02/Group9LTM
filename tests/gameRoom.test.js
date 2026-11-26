@@ -4,7 +4,7 @@
  *   1. nicknameResolver.js (đánh số trùng biệt danh "Cánh Cụt 1", "Cánh Cụt 2" & trích xuất @mention)
  *   2. GroupManager (trùng biệt danh + @mention trong phòng nhóm)
  *   3. GameRoomManager (2–10 người/phòng, ẩn danh, mã phòng, chuyển host, tự hủy phòng & cả 5 game:
- *      quiz_race, word_chain, undercover, number_bomb, caro_arena)
+ *      quiz_race, word_chain, undercover, mind_duel, caro_arena)
  *   4. Live WebSocket Server E2E (Group Chat trùng biệt danh + @mention; Game Room đủ 10 người,
  *      chặn người thứ 11, chat @mention trong phòng game, chơi thực tế & tự hủy phòng khi trống)
  */
@@ -185,8 +185,8 @@ function runGameRoomManagerUnitTests() {
       undercoverClueMs: 30_000,
       undercoverVoteMs: 30_000,
       undercoverResultMs: 30_000,
-      numberBombTurnMs: 30_000,
-      numberBombBoomMs: 30_000,
+      mindDuelChooseMs: 30_000,
+      mindDuelRevealMs: 30_000,
       caroMoveMs: 30_000,
     },
   });
@@ -341,32 +341,43 @@ function runGameRoomManagerUnitTests() {
   mgr.leaveRoom('client-32');
   mgr.leaveRoom('client-33');
 
-  // 3E. Game 4: number_bomb (Đặt Bom Số)
-  const nbCreate = mgr.createRoom(makeUser(41, 'Bom1'), { gameType: 'number_bomb' });
-  mgr.joinRoom(makeUser(42, 'Bom2'), { roomId: nbCreate.room.roomId });
+  // 3E. Game 4: mind_duel (🃏 Đấu Trí Tâm Lý — Cược Điểm & Lật Bài)
+  const mdCreate = mgr.createRoom(makeUser(41, 'CaoThủ1'), { gameType: 'mind_duel' });
+  mgr.joinRoom(makeUser(42, 'CaoThủ2'), { roomId: mdCreate.room.roomId });
   assert.strictEqual(mgr.startGame('client-41').ok, true);
-  const nbRoom = mgr.getRoom(nbCreate.room.roomId);
-  const bombNum = nbRoom.game.bombNumber;
-  const turn1 = nbRoom.game.turnClientId;
-  const turn2 = turn1 === 'client-41' ? 'client-42' : 'client-41';
+  const mdRoom = mgr.getRoom(mdCreate.room.roomId);
+  assert.strictEqual(mdRoom.game.phase, 'choose');
+  assert.strictEqual(mdRoom.players.get('client-41').score, 100, 'Mind Duel must start players at 100 pts');
+  assert.strictEqual(mdRoom.players.get('client-42').score, 100);
 
-  // Ngoài khoảng (0, 101) -> từ chối
-  assert.strictEqual(mgr.handleAction(turn1, { action: 'guess_number', number: 101 }).ok, false);
+  // Lá bài hoặc mức cược sai -> từ chối
+  assert.strictEqual(mgr.handleAction('client-41', { action: 'pick_card', card: 'invalid', stake: 20 }).ok, false);
+  assert.strictEqual(mgr.handleAction('client-41', { action: 'pick_card', card: 'attack', stake: 99 }).ok, false);
 
-  // Chọn 1 số an toàn != bombNum -> thu hẹp khoảng & chuyển lượt
-  const safeNum = bombNum === 50 ? 49 : 50;
-  assert.strictEqual(mgr.handleAction(turn1, { action: 'guess_number', number: safeNum }).ok, true);
-  assert.strictEqual(nbRoom.game.turnClientId, turn2);
-  if (safeNum < bombNum) {
-    assert.strictEqual(nbRoom.game.minBound, safeNum);
-  } else {
-    assert.strictEqual(nbRoom.game.maxBound, safeNum);
-  }
+  // Người 1 chọn Tấn Công (cược 30) -> pha vẫn là choose, không lộ bài trong public state
+  assert.strictEqual(mgr.handleAction('client-41', { action: 'pick_card', card: 'attack', stake: 30 }).ok, true);
+  assert.strictEqual(mdRoom.game.phase, 'choose');
+  const mdPublicChoosing = mgr._serializePublicGameState(mdRoom);
+  assert.strictEqual(mdPublicChoosing.lockedCount, 1);
+  assert.strictEqual(mdPublicChoosing.roundResults.length, 0, 'Choices must stay secret until reveal');
 
-  // Người 2 chọn đúng số bom -> NỔ & người 1 thắng luôn (vì chỉ còn 1 người sống sót)
-  assert.strictEqual(mgr.handleAction(turn2, { action: 'guess_number', number: bombNum }).ok, true);
-  assert.strictEqual(nbRoom.game.phase, 'ended');
-  assert.strictEqual(nbRoom.game.winnerName, nbRoom.players.get(turn1).nickname);
+  // Người 2 chọn Tích Lũy (cược 20) -> tự lật bài! Tấn Công cướp kho: +50 (150), Tích Lũy mất -30 (70)
+  assert.strictEqual(mgr.handleAction('client-42', { action: 'pick_card', card: 'charge', stake: 20 }).ok, true);
+  assert.strictEqual(mdRoom.game.phase, 'reveal');
+  assert.strictEqual(mdRoom.players.get('client-41').score, 150);
+  assert.strictEqual(mdRoom.players.get('client-42').score, 70);
+  assert.strictEqual(mdRoom.game.history.length, 1);
+
+  // Kiểm tra vòng cuối (Vòng 6) nhân đôi điểm x2: Lừa Đòn (20) xuyên Lá Chắn (20) -> +35*2=+70 / -25*2=-50
+  mdRoom.game.round = 6;
+  mgr._beginMindDuelRound(mdRoom, false);
+  assert.strictEqual(mgr._serializePublicGameState(mdRoom).isDoubleRound, true);
+  assert.strictEqual(mgr.handleAction('client-41', { action: 'pick_card', card: 'shield', stake: 20 }).ok, true);
+  assert.strictEqual(mgr.handleAction('client-42', { action: 'pick_card', card: 'bluff', stake: 20 }).ok, true);
+  assert.strictEqual(mdRoom.game.phase, 'reveal');
+  assert.strictEqual(mdRoom.players.get('client-41').score, 100, 'Shield pierced on x2 round: 150 - 50 = 100');
+  assert.strictEqual(mdRoom.players.get('client-42').score, 140, 'Bluff pierces shield on x2 round: 70 + 70 = 140');
+
   mgr.leaveRoom('client-41');
   mgr.leaveRoom('client-42');
 
@@ -405,7 +416,101 @@ function runGameRoomManagerUnitTests() {
   mgr.leaveRoom('client-53');
   assert.strictEqual(mgr.rooms.size, 0);
 
-  console.log('✅ Passed: GameRoomManager (10-player cap, lifecycle & all 5 games)');
+  // 3G. Regression: Quiz Race attribution, speed ordering, receivedAt fairness, score reset & leave edge cases
+  const qrCreate = mgr.createRoom(makeUser(101, 'NhanhNhất', '⚡'), { gameType: 'quiz_race' });
+  const qrId = qrCreate.room.roomId;
+  mgr.joinRoom(makeUser(102, 'ChậmHơn', '🐢'), { roomId: qrId });
+  mgr.joinRoom(makeUser(103, 'ChọnSai', '🙈'), { roomId: qrId });
+  assert.strictEqual(mgr.startGame('client-101').ok, true);
+  const qrRoom = mgr.getRoom(qrId);
+  // Lùi questionStartedAt về 8 giây trước để mô phỏng các mốc thời gian thực tế trong quá khứ (<= Date.now())
+  qrRoom.game.questionStartedAt = Date.now() - 8000;
+  const q0Start = qrRoom.game.questionStartedAt;
+  const q0Ans = qrRoom.game.questions[0].answer;
+  const q0Token = mgr._serializePublicGameState(qrRoom).questionToken;
+
+  // Giả lập độ trễ Redis: ChậmHơn đến sau về thời gian bấm (t+5000ms) nhưng vào handleAction trước,
+  // NhanhNhất bấm sớm hơn nhiều (t+1000ms) nhưng vào handleAction sau -> NhanhNhất VẪN phải điểm cao hơn!
+  assert.strictEqual(
+    mgr.handleAction('client-102', { action: 'answer', optionIndex: q0Ans }, { receivedAt: q0Start + 5000 }).ok,
+    true
+  );
+  assert.strictEqual(
+    mgr.handleAction('client-103', { action: 'answer', optionIndex: (q0Ans + 1) % 4 }, { receivedAt: q0Start + 500 }).ok,
+    true
+  );
+  assert.strictEqual(
+    mgr.handleAction('client-101', { action: 'answer', optionIndex: q0Ans }, { receivedAt: q0Start + 1000 }).ok,
+    true
+  );
+
+  assert.strictEqual(qrRoom.game.phase, 'reveal');
+  const sFast = qrRoom.players.get('client-101').score;
+  const sSlow = qrRoom.players.get('client-102').score;
+  const sWrong = qrRoom.players.get('client-103').score;
+  assert.ok(sFast > sSlow, `Faster correct player (${sFast}) MUST strictly outscore slower player (${sSlow})`);
+  assert.ok(sSlow >= 100, 'Slower correct player must still earn >= 100');
+  assert.strictEqual(sWrong, 0, 'Wrong answer must earn exactly 0');
+  assert.strictEqual(qrRoom.game.lastRoundResults[0].clientId, 'client-101');
+  assert.strictEqual(qrRoom.game.lastRoundResults[0].isFastest, true);
+  assert.strictEqual(qrRoom.game.lastRoundResults[0].fastestBonus, 10);
+  assert.strictEqual(qrRoom.game.lastRoundResults[1].clientId, 'client-102');
+  assert.strictEqual(qrRoom.game.lastRoundResults[2].clientId, 'client-103');
+
+  // Chơi ván mới (play_again) -> toàn bộ điểm phải reset về 0 và đổi questionToken!
+  assert.strictEqual(mgr.handleAction('client-101', { action: 'play_again' }).ok, true);
+  assert.strictEqual(qrRoom.players.get('client-101').score, 0, 'play_again must reset score to 0');
+  assert.strictEqual(qrRoom.players.get('client-102').score, 0, 'play_again must reset score to 0');
+  assert.strictEqual(qrRoom.players.get('client-103').score, 0, 'play_again must reset score to 0');
+  assert.notStrictEqual(mgr._serializePublicGameState(qrRoom).questionToken, q0Token);
+
+  // Người chơi đã trả lời rồi rời phòng giữa chừng KHÔNG được làm lộ đáp án sớm cho người chưa trả lời
+  const qNewAns = qrRoom.game.questions[0].answer;
+  assert.strictEqual(mgr.handleAction('client-103', { action: 'answer', optionIndex: qNewAns }).ok, true);
+  mgr.leaveRoom('client-103');
+  assert.strictEqual(qrRoom.game.phase, 'question', 'Leaving player answer must not trigger premature reveal');
+  assert.strictEqual(qrRoom.game.answers.has('client-103'), false);
+
+  // Chỉ client-101 trả lời đúng, client-102 trả lời sai -> đúng người được cộng điểm, không lệch sang đối phương
+  assert.strictEqual(mgr.handleAction('client-101', { action: 'answer', optionIndex: qNewAns }).ok, true);
+  assert.strictEqual(mgr.handleAction('client-102', { action: 'answer', optionIndex: (qNewAns + 2) % 4 }).ok, true);
+  assert.strictEqual(qrRoom.game.phase, 'reveal');
+  assert.ok(qrRoom.players.get('client-101').score >= 100);
+  assert.strictEqual(qrRoom.players.get('client-102').score, 0);
+
+  // Đổi sang game khác -> điểm reset về 0
+  assert.strictEqual(mgr.handleAction('client-101', { action: 'back_to_lobby' }).ok, true);
+  assert.strictEqual(mgr.selectGame('client-101', 'word_chain').ok, true);
+  assert.strictEqual(qrRoom.players.get('client-101').score, 0, 'selectGame must reset scores to 0');
+  mgr.leaveRoom('client-101');
+  mgr.leaveRoom('client-102');
+
+  // 3H. Regression: Undercover mid-game spectator must NOT earn points when game ends
+  const uc2 = mgr.createRoom(makeUser(111, 'Dân1'), { gameType: 'undercover' });
+  mgr.joinRoom(makeUser(112, 'Dân2'), { roomId: uc2.room.roomId });
+  mgr.joinRoom(makeUser(113, 'Dân3'), { roomId: uc2.room.roomId });
+  assert.strictEqual(mgr.startGame('client-111').ok, true);
+  const uc2Room = mgr.getRoom(uc2.room.roomId);
+  // Người thứ 4 vào giữa ván làm khán giả
+  mgr.joinRoom(makeUser(114, 'KhánGiả'), { roomId: uc2.room.roomId });
+  const uc2Spy = [...uc2Room.game.spyIds][0];
+  const uc2Civs = ['client-111', 'client-112', 'client-113'].filter((id) => id !== uc2Spy);
+  mgr.handleAction('client-111', { action: 'submit_clue', clue: 'Gợi ý rất quen thuộc' });
+  mgr.handleAction('client-112', { action: 'submit_clue', clue: 'Ai cũng biết món này' });
+  mgr.handleAction('client-113', { action: 'submit_clue', clue: 'Xuất hiện hằng ngày' });
+  mgr.handleAction(uc2Civs[0], { action: 'vote', targetClientId: uc2Spy });
+  mgr.handleAction(uc2Civs[1], { action: 'vote', targetClientId: uc2Spy });
+  mgr.handleAction(uc2Spy, { action: 'vote', targetClientId: uc2Civs[0] });
+  assert.strictEqual(uc2Room.game.phase, 'ended');
+  assert.strictEqual(uc2Room.game.winnerSide, 'civilians');
+  assert.strictEqual(uc2Room.players.get(uc2Civs[0]).score, 25);
+  assert.strictEqual(uc2Room.players.get(uc2Civs[1]).score, 25);
+  assert.strictEqual(uc2Room.players.get(uc2Spy).score, 0);
+  assert.strictEqual(uc2Room.players.get('client-114').score, 0, 'Mid-game spectator must NOT earn points');
+  for (const cid of ['client-111', 'client-112', 'client-113', 'client-114']) mgr.leaveRoom(cid);
+  assert.strictEqual(mgr.rooms.size, 0);
+
+  console.log('✅ Passed: GameRoomManager (10-player cap, lifecycle, scoring accuracy & all 5 games)');
 }
 
 // ─── 4. Live WebSocket Server E2E Tests ──────────────────────────────────────
@@ -566,10 +671,10 @@ async function runLiveWebSocketTests() {
       players.push(c);
     }
 
-    // Player 1 tạo phòng number_bomb (tối đa 10 người)
+    // Player 1 tạo phòng mind_duel (tối đa 10 người)
     players[0].send(CLIENT_TYPES.GAME_ROOM_CREATE, {
-      gameType: 'number_bomb',
-      name: 'Phòng Bom 10 Người',
+      gameType: 'mind_duel',
+      name: 'Phòng Đấu Trí 10 Người',
       maxPlayers: 10,
     });
     const roomCreated = await players[0].waitFor((m) => m.type === SERVER_TYPES.GAME_ROOM_JOINED);
@@ -603,24 +708,27 @@ async function runLiveWebSocketTests() {
     assert.strictEqual(roomMsgs[0].payload.mentions[0].clientId, players[1].clientId);
     assert.strictEqual(roomMsgs[0].payload.mentions[0].nickname, 'Gấu Trúc 2');
 
-    // Host bắt đầu game Đặt Bom Số -> cả 10 người nhận trạng thái playing
+    // Host bắt đầu game Đấu Trí Tâm Lý -> cả 10 người nhận trạng thái choose (vốn 100đ)
     players[0].send(CLIENT_TYPES.GAME_ROOM_START);
     const startStates = await Promise.all(
-      players.slice(0, 10).map((c) => c.waitFor((m) => m.type === SERVER_TYPES.GAME_ROOM_STATE && m.payload.gameState.phase === 'playing'))
+      players.slice(0, 10).map((c) => c.waitFor((m) => m.type === SERVER_TYPES.GAME_ROOM_STATE && m.payload.gameState.phase === 'choose'))
     );
-    const turnClientId = startStates[0].payload.gameState.turnClientId;
-    const activePlayer = players.find((p) => p.clientId === turnClientId);
-    assert.ok(activePlayer, 'Turn player must be in the 10-player room');
+    assert.strictEqual(startStates[0].payload.gameState.round, 1);
+    assert.strictEqual(startStates[0].payload.players.every((p) => p.score === 100), true);
 
-    // Người đến lượt chọn số 50 -> nhận game_room_state mới (playing hoặc boom)
-    activePlayer.send(CLIENT_TYPES.GAME_ROOM_ACTION, { action: 'guess_number', number: 50 });
-    const afterGuess = await players[0].waitFor(
-      (m) => m.type === SERVER_TYPES.GAME_ROOM_STATE && (
-        m.payload.gameState.phase === 'boom'
-        || (m.payload.gameState.history && m.payload.gameState.history.length >= 1)
-      )
+    // Cả 10 người cùng úp bài -> tự động lật bài sang pha reveal với đủ 10 kết quả
+    const cardsCycle = ['attack', 'shield', 'bluff', 'charge'];
+    for (let i = 0; i < 10; i++) {
+      players[i].send(CLIENT_TYPES.GAME_ROOM_ACTION, {
+        action: 'pick_card',
+        card: cardsCycle[i % 4],
+        stake: 20,
+      });
+    }
+    const afterReveal = await players[0].waitFor(
+      (m) => m.type === SERVER_TYPES.GAME_ROOM_STATE && m.payload.gameState.phase === 'reveal'
     );
-    assert.ok(afterGuess.payload.gameState.history.length >= 1);
+    assert.strictEqual(afterReveal.payload.gameState.roundResults.length, 10);
 
     // Host chuyển sang game Ai Là Gián Điệp? (undercover) và bắt đầu cho cả 10 người (sẽ có 2 gián điệp)
     players[0].send(CLIENT_TYPES.GAME_ROOM_ACTION, { action: 'back_to_lobby' });
@@ -658,7 +766,7 @@ async function runLiveWebSocketTests() {
     const listRes = await players[10].waitFor((m) => m.type === SERVER_TYPES.GAME_ROOM_LIST);
     assert.strictEqual(listRes.payload.rooms.length, 0);
 
-    // 4C. Chơi các game mới NGAY TRONG CHAT 1-1 VỚI LUMI AI (Đố Vui + Nối Từ + Đặt Bom Số)
+    // 4C. Chơi các game mới NGAY TRONG CHAT 1-1 VỚI LUMI AI (Đố Vui + Nối Từ + Đấu Trí Tâm Lý)
     const solo = await connectWsClient(wsUrl);
     openClients.push(solo);
     const soloConn = await solo.waitFor((m) => m.type === SERVER_TYPES.CONNECTED);
@@ -677,25 +785,32 @@ async function runLiveWebSocketTests() {
     const lumiQuizReveal = await solo.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'quiz_race' && m.payload.gameState.phase === 'reveal');
     assert.strictEqual(typeof lumiQuizReveal.payload.gameState.correctIndex, 'number');
 
-    // 4C-2: Đặt Bom Số với Lumi AI -> Lumi tự động chọn số khi tới lượt
-    solo.send(CLIENT_TYPES.GAME_INVITE, { gameType: 'number_bomb' });
-    const lumiBombStart = await solo.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'number_bomb' && m.payload.gameState.phase === 'playing');
-    if (lumiBombStart.payload.gameState.turnClientId === solo.clientId) {
-      solo.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'guess_number', number: 50 });
-    }
-    const lumiBombAfter = await solo.waitFor(
-      (m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'number_bomb' && (
-        m.payload.gameState.phase === 'ended'
-        || m.payload.gameState.phase === 'boom'
-        || (m.payload.gameState.history && m.payload.gameState.history.length >= 1)
-      )
+    // 4C-2: Đấu Trí Tâm Lý với Lumi AI -> user chọn lá bài & cược -> Lumi AI tự chọn bài -> lật bài reveal
+    solo.send(CLIENT_TYPES.GAME_INVITE, { gameType: 'mind_duel' });
+    const lumiMdStart = await solo.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'mind_duel' && m.payload.gameState.phase === 'choose');
+    assert.strictEqual(lumiMdStart.payload.gameState.round, 1);
+    solo.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'pick_card', card: 'bluff', stake: 20 });
+    const lumiMdReveal = await solo.waitFor(
+      (m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'mind_duel' && m.payload.gameState.phase === 'reveal'
     );
-    assert.ok(lumiBombAfter.payload.gameState.history.length >= 1 || lumiBombAfter.payload.gameState.phase === 'ended');
+    assert.strictEqual(lumiMdReveal.payload.gameState.roundResults.length, 2);
+    assert.ok(lumiMdReveal.payload.gameState.roundResults.some((r) => r.clientId === solo.clientId && r.card === 'bluff'));
 
     // 4C-3: Đóng game nhúng -> vẫn ở trong phòng chat Lumi
     solo.send(CLIENT_TYPES.CHAT_GAME_CLOSE);
     const lumiClosed = await solo.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.closed === true);
     assert.strictEqual(lumiClosed.payload.contextType, '1v1');
+
+    // 4C-4: Cờ Caro với Lumi AI -> Chơi lại (GAME_RESET) đảo lượt cho Lumi đi X trước KHÔNG bị treo!
+    solo.send(CLIENT_TYPES.GAME_INVITE, { gameType: 'caro', size: 10 });
+    const lumiCaroStart = await solo.waitFor((m) => m.type === SERVER_TYPES.GAME_STATE && m.payload.action === 'start');
+    assert.strictEqual(lumiCaroStart.payload.game.turn, solo.clientId);
+    solo.send(CLIENT_TYPES.GAME_RESET, { size: 10 });
+    const lumiCaroReset = await solo.waitFor((m) => m.type === SERVER_TYPES.GAME_STATE && m.payload.action === 'start');
+    assert.notStrictEqual(lumiCaroReset.payload.game.turn, solo.clientId, 'After reset, Lumi should alternate to X');
+    const lumiFirstMove = await solo.waitFor((m) => m.type === SERVER_TYPES.GAME_STATE && m.payload.action === 'update');
+    assert.strictEqual(lumiFirstMove.payload.game.turn, solo.clientId, 'Lumi must auto-play its opening X move without deadlocking');
+    solo.send(CLIENT_TYPES.GAME_QUIT);
     solo.send(CLIENT_TYPES.LEAVE_ROOM);
 
     // 4D. Chơi game mới NGAY TRONG CHAT 1-1 VỚI NGƯỜI THẬT (không cần vào Phòng Game riêng)
@@ -734,6 +849,51 @@ async function runLiveWebSocketTests() {
     const wcActive = wcTurnId === pA.clientId ? pA : pB;
     wcActive.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'submit_word', word: `${wcReqStart} đẹp` });
     await pB.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameState.chainLength === 2);
+
+    // Đóng Nối Từ -> mời chơi Đố Vui Tốc Độ 1-1 và kiểm tra cộng đúng điểm cho đúng người chơi!
+    pA.send(CLIENT_TYPES.GAME_INVITE, { gameType: 'quiz_race' });
+    const qInvB = await pB.waitFor((m) => m.type === SERVER_TYPES.GAME_STATE && m.payload.action === 'invite' && m.payload.gameType === 'quiz_race');
+    assert.strictEqual(qInvB.payload.gameType, 'quiz_race');
+    pB.send(CLIENT_TYPES.GAME_ACCEPT, { gameType: 'quiz_race' });
+    const [qStartA, qStartB] = await Promise.all([
+      pA.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'quiz_race' && m.payload.gameState.phase === 'question'),
+      pB.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'quiz_race' && m.payload.gameState.phase === 'question'),
+    ]);
+    assert.strictEqual(qStartA.payload.players.length, 2);
+    assert.strictEqual(qStartB.payload.players.length, 2);
+    // Kiểm tra đáp án chính xác từ ngân hàng câu hỏi để pA trả lời đúng & nhanh hơn, pB trả lời sai
+    const { QUIZ_QUESTIONS } = require('../backend/gameData');
+    const matchedQ = QUIZ_QUESTIONS.find((item) => item.q === qStartA.payload.gameState.question.q);
+    assert.ok(matchedQ, 'Question must exist in QUIZ_QUESTIONS');
+    const correctIdx = matchedQ.answer;
+    const wrongIdx = (correctIdx + 1) % 4;
+    pA.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'answer', optionIndex: correctIdx });
+    await new Promise((r) => setTimeout(r, 80));
+    pB.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'answer', optionIndex: wrongIdx });
+    const [qRevealA, qRevealB] = await Promise.all([
+      pA.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'quiz_race' && m.payload.gameState.phase === 'reveal'),
+      pB.waitFor((m) => m.type === SERVER_TYPES.CHAT_GAME_STATE && m.payload.gameType === 'quiz_race' && m.payload.gameState.phase === 'reveal'),
+    ]);
+    const pAScore = qRevealA.payload.players.find((p) => p.clientId === pA.clientId).score;
+    const pBScore = qRevealB.payload.players.find((p) => p.clientId === pB.clientId).score;
+    assert.ok(pAScore >= 100, `Alice answered correctly so Alice must get >= 100 pts (got ${pAScore})`);
+    assert.strictEqual(pBScore, 0, `Bob answered wrong so Bob must get 0 pts (got ${pBScore})`);
+    const resA = qRevealA.payload.gameState.roundResults.find((r) => r.clientId === pA.clientId);
+    const resB = qRevealA.payload.gameState.roundResults.find((r) => r.clientId === pB.clientId);
+    assert.strictEqual(resA.isCorrect, true);
+    assert.strictEqual(resA.gained, pAScore);
+    assert.strictEqual(resB.isCorrect, false);
+    assert.strictEqual(resB.gained, 0);
+
+    // Chơi ván mới -> reset điểm cả 2 về 0
+    pA.send(CLIENT_TYPES.CHAT_GAME_ACTION, { action: 'play_again' });
+    const qRestartA = await pA.waitFor(
+      (m) => m.type === SERVER_TYPES.CHAT_GAME_STATE
+        && m.payload.gameType === 'quiz_race'
+        && m.payload.gameState.phase === 'question'
+        && m.payload.gameState.questionToken !== qStartA.payload.gameState.questionToken
+    );
+    assert.strictEqual(qRestartA.payload.players.every((p) => p.score === 0), true, 'play_again must reset 1-1 embedded scores to 0');
 
     // Đóng game -> vẫn nhắn tin 1-1 bình thường
     pA.send(CLIENT_TYPES.CHAT_GAME_CLOSE);

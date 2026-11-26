@@ -5,7 +5,7 @@
  *   1. quiz_race    – ⚡ Đố Vui Tốc Độ (2–10 người)
  *   2. word_chain   – ⛓️ Nối Từ Thần Tốc (2–10 người)
  *   3. undercover   – 🕵️ Ai Là Gián Điệp? (3–10 người)
- *   4. number_bomb  – 💣 Đặt Bom Số (2–10 người)
+ *   4. mind_duel    – 🃏 Đấu Trí Tâm Lý (2–10 người)
  *   5. caro_arena   – ⚔️ Cờ Caro Khán Đài (2 người đấu, tối đa 10 người cổ vũ & luân phiên)
  *
  * Đặc điểm:
@@ -70,13 +70,13 @@ const GAME_CATALOG = Object.freeze({
     maxPlayers: 10,
     description: 'Mô tả từ bí mật và bỏ phiếu tìm ra kẻ gián điệp ẩn danh!',
   },
-  number_bomb: {
-    id: 'number_bomb',
-    name: 'Đặt Bom Số',
-    icon: '💣',
+  mind_duel: {
+    id: 'mind_duel',
+    name: 'Đấu Trí Tâm Lý',
+    icon: '🃏',
     minPlayers: 2,
     maxPlayers: 10,
-    description: 'Thu hẹp khoảng số 1–100 để né quả bom bí mật siêu hồi hộp!',
+    description: '6 vòng đấu bài kín (Tấn Công • Lá Chắn • Lừa Đòn • Tích Lũy) & cược điểm, vòng cuối x2 cực căng!',
   },
   caro_arena: {
     id: 'caro_arena',
@@ -89,6 +89,38 @@ const GAME_CATALOG = Object.freeze({
 });
 
 const VALID_GAME_TYPES = Object.freeze(Object.keys(GAME_CATALOG));
+
+const MIND_DUEL_CARDS = Object.freeze({
+  attack: {
+    id: 'attack',
+    icon: '⚔️',
+    name: 'Tấn Công',
+    shortDesc: 'Phá Lừa Đòn & Cướp Tích Lũy • Thua Lá Chắn',
+  },
+  shield: {
+    id: 'shield',
+    icon: '🛡️',
+    name: 'Lá Chắn',
+    shortDesc: 'Phản đòn Tấn Công • Bị Lừa Đòn xuyên khiên',
+  },
+  bluff: {
+    id: 'bluff',
+    icon: '🎭',
+    name: 'Lừa Đòn',
+    shortDesc: 'Xuyên thủng Lá Chắn • Thua Tấn Công',
+  },
+  charge: {
+    id: 'charge',
+    icon: '💰',
+    name: 'Tích Lũy',
+    shortDesc: 'Gom thưởng lớn nếu né được Tấn Công',
+  },
+});
+
+const VALID_MIND_DUEL_CARDS = Object.freeze(Object.keys(MIND_DUEL_CARDS));
+const VALID_MIND_DUEL_STAKES = Object.freeze([10, 20, 30]);
+const MIND_DUEL_START_SCORE = 100;
+const MIND_DUEL_TOTAL_ROUNDS = 6;
 
 function shuffleArray(arr) {
   const copy = [...arr];
@@ -135,8 +167,8 @@ class GameRoomManager {
       undercoverClueMs: timings.undercoverClueMs || 30_000,
       undercoverVoteMs: timings.undercoverVoteMs || 35_000,
       undercoverResultMs: timings.undercoverResultMs || 4_000,
-      numberBombTurnMs: timings.numberBombTurnMs || 14_000,
-      numberBombBoomMs: timings.numberBombBoomMs || 3_000,
+      mindDuelChooseMs: timings.mindDuelChooseMs || 16_000,
+      mindDuelRevealMs: timings.mindDuelRevealMs || 4_500,
       caroMoveMs: timings.caroMoveMs || 30_000,
     };
 
@@ -261,6 +293,8 @@ class GameRoomManager {
         return {
           gameType: 'quiz_race',
           phase: g.phase, // 'question' | 'reveal' | 'ended'
+          matchId: g.matchId || null,
+          questionToken: `${g.matchId || 'q'}:${g.currentIndex}`,
           currentIndex: g.currentIndex,
           totalQuestions: g.questions.length,
           endsAt: g.endsAt || null,
@@ -269,8 +303,8 @@ class GameRoomManager {
             options: currentQ.options,
             category: currentQ.category,
           } : null,
-          answeredCount: g.answers ? g.answers.size : 0,
-          answeredIds: g.answers ? [...g.answers.keys()] : [],
+          answeredCount: [...room.players.keys()].filter((cid) => g.answers && g.answers.has(cid)).length,
+          answeredIds: g.answers ? [...g.answers.keys()].filter((cid) => room.players.has(cid)) : [],
           correctIndex: g.phase === 'reveal' && currentQ ? currentQ.answer : null,
           roundResults: g.phase === 'reveal' ? (g.lastRoundResults || []) : [],
           podium: g.phase === 'ended' ? this._buildLeaderboard(room) : [],
@@ -332,20 +366,25 @@ class GameRoomManager {
         };
       }
 
-      case 'number_bomb': {
+      case 'mind_duel': {
+        const lockedIds = g.choices
+          ? [...g.choices.keys()].filter((cid) => room.players.has(cid))
+          : [];
         return {
-          gameType: 'number_bomb',
-          phase: g.phase, // 'playing' | 'boom' | 'ended'
+          gameType: 'mind_duel',
+          phase: g.phase, // 'choose' | 'reveal' | 'ended'
+          matchId: g.matchId || null,
+          roundToken: `${g.matchId || 'md'}:${g.round}`,
           round: g.round,
-          minBound: g.minBound, // Exclusive lower bound (valid guess > minBound)
-          maxBound: g.maxBound, // Exclusive upper bound (valid guess < maxBound)
-          turnClientId: g.turnClientId,
-          turnNickname: room.players.get(g.turnClientId)?.nickname || '',
+          totalRounds: g.totalRounds,
+          multiplier: g.round === g.totalRounds ? 2 : 1,
+          isDoubleRound: g.round === g.totalRounds,
           endsAt: g.endsAt || null,
-          aliveIds: [...g.aliveIds],
-          eliminatedIds: [...g.eliminatedIds],
-          history: g.history.slice(-14),
-          lastBoom: g.lastBoom || null,
+          lockedIds,
+          lockedCount: lockedIds.length,
+          roundResults: g.phase === 'reveal' ? (g.lastRoundResults || []) : [],
+          roundSummary: g.phase === 'reveal' ? (g.lastRoundSummary || '') : '',
+          history: (g.history || []).slice(-6),
           winnerName: g.winnerName || null,
           podium: g.phase === 'ended' ? this._buildLeaderboard(room) : [],
         };
@@ -386,8 +425,10 @@ class GameRoomManager {
         nickname: p.nickname,
         avatar: p.avatar || '🦊',
         score: p.score || 0,
+        joinedAt: p.joinedAt || 0,
       }))
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => (b.score - a.score) || (a.joinedAt - b.joinedAt))
+      .map(({ joinedAt, ...entry }) => entry);
   }
 
   buildRoomSnapshot(room) {
@@ -456,6 +497,10 @@ class GameRoomManager {
   createEmbeddedSession(contextKey, hostUser, options = {}) {
     this.destroyRoomByContext(contextKey);
 
+    if (hostUser && hostUser.clientId && this.clientRoomMap.has(hostUser.clientId)) {
+      this.leaveRoom(hostUser.clientId);
+    }
+
     const created = this.createRoom(hostUser, {
       gameType: options.gameType,
       maxPlayers: options.maxPlayers || this.maxPlayers,
@@ -472,6 +517,9 @@ class GameRoomManager {
     const initialPlayers = Array.isArray(options.initialPlayers) ? options.initialPlayers : [];
     for (const p of initialPlayers) {
       if (p && p.clientId && p.clientId !== hostUser.clientId) {
+        if (this.clientRoomMap.has(p.clientId)) {
+          this.leaveRoom(p.clientId);
+        }
         this.joinRoom(p, { roomId: room.roomId });
       }
     }
@@ -736,6 +784,11 @@ class GameRoomManager {
     }
 
     this._clearAllTimers(room);
+    if (room.gameType !== gameType) {
+      for (const player of room.players.values()) {
+        player.score = 0;
+      }
+    }
     room.gameType = gameType;
     room.status = 'lobby';
     room.game = null;
@@ -766,6 +819,12 @@ class GameRoomManager {
     }
 
     this._clearAllTimers(room);
+    // Đặt lại điểm về 0 cho mỗi ván đấu mới (trừ Cờ Caro Khán Đài giữ điểm chuỗi thắng trên khán đài)
+    if (room.gameType !== 'caro_arena') {
+      for (const player of room.players.values()) {
+        player.score = 0;
+      }
+    }
     room.status = 'playing';
     room.lastActivityAt = Date.now();
 
@@ -779,8 +838,8 @@ class GameRoomManager {
       case 'undercover':
         this._startUndercover(room);
         break;
-      case 'number_bomb':
-        this._startNumberBomb(room);
+      case 'mind_duel':
+        this._startMindDuel(room);
         break;
       case 'caro_arena':
         this._startCaroArena(room);
@@ -794,10 +853,12 @@ class GameRoomManager {
 
   // ─── Xử lý hành động trong game ────────────────────────────────────────────
 
-  handleAction(clientId, payload = {}) {
+  handleAction(clientId, payload = {}, meta = {}) {
     const roomId = this.clientRoomMap.get(clientId);
     const room = roomId ? this.rooms.get(roomId) : null;
-    if (!room) return { ok: false, error: 'Bạn chưa ở trong phòng game.' };
+    if (!room || !room.players.has(clientId)) {
+      return { ok: false, error: 'Bạn chưa ở trong phòng game.' };
+    }
 
     const action = payload.action;
     if (action === 'back_to_lobby') {
@@ -819,17 +880,22 @@ class GameRoomManager {
       return { ok: false, error: 'Ván chơi chưa bắt đầu.' };
     }
 
-    room.lastActivityAt = Date.now();
+    const now = Date.now();
+    const actionTimestamp = (meta && Number.isFinite(meta.receivedAt))
+      ? Math.min(now, meta.receivedAt)
+      : now;
+
+    room.lastActivityAt = now;
 
     switch (room.game.gameType) {
       case 'quiz_race':
-        return this._handleQuizAction(room, clientId, payload);
+        return this._handleQuizAction(room, clientId, payload, actionTimestamp);
       case 'word_chain':
-        return this._handleWordChainAction(room, clientId, payload);
+        return this._handleWordChainAction(room, clientId, payload, actionTimestamp);
       case 'undercover':
         return this._handleUndercoverAction(room, clientId, payload);
-      case 'number_bomb':
-        return this._handleNumberBombAction(room, clientId, payload);
+      case 'mind_duel':
+        return this._handleMindDuelAction(room, clientId, payload, actionTimestamp);
       case 'caro_arena':
         return this._handleCaroArenaAction(room, clientId, payload);
       default:
@@ -843,20 +909,22 @@ class GameRoomManager {
 
   _startQuizRace(room) {
     const questions = shuffleArray(QUIZ_QUESTIONS).slice(0, 8);
+    const startedAt = Date.now();
     room.game = {
       gameType: 'quiz_race',
+      matchId: uuidv4(),
       phase: 'question',
       questions,
       currentIndex: 0,
       answers: new Map(), // clientId -> { optionIndex, answeredAt }
       streaks: new Map(),
       lastRoundResults: [],
-      questionStartedAt: Date.now(),
-      endsAt: Date.now() + this.timings.quizQuestionMs,
+      questionStartedAt: startedAt,
+      endsAt: startedAt + this.timings.quizQuestionMs,
     };
 
     this._broadcastState(room, {
-      systemNotice: '⚡ Đố Vui Tốc Độ bắt đầu! 8 câu hỏi — trả lời càng nhanh điểm càng cao!',
+      systemNotice: '⚡ Đố Vui Tốc Độ bắt đầu! 8 câu hỏi — trả lời đúng càng nhanh điểm càng cao!',
     });
 
     this._setRoomTimer(room, this.timings.quizQuestionMs, () => {
@@ -864,7 +932,7 @@ class GameRoomManager {
     });
   }
 
-  _handleQuizAction(room, clientId, payload) {
+  _handleQuizAction(room, clientId, payload, actionTimestamp = Date.now()) {
     const g = room.game;
     if (payload.action !== 'answer') return { ok: false, error: 'Hành động không hợp lệ.' };
     if (g.phase !== 'question') return { ok: false, error: 'Chưa đến lúc trả lời câu hỏi.' };
@@ -876,10 +944,13 @@ class GameRoomManager {
       return { ok: false, error: 'Bạn đã chốt đáp án cho câu này rồi.' };
     }
 
-    g.answers.set(clientId, { optionIndex, answeredAt: Date.now() });
+    const answeredAt = Math.min(Date.now(), Math.max(g.questionStartedAt, actionTimestamp));
+    g.answers.set(clientId, { optionIndex, answeredAt });
 
-    // Nếu toàn bộ người chơi đã trả lời -> mở đáp án ngay
-    if (g.answers.size >= room.players.size) {
+    // Nếu toàn bộ người chơi đang có mặt đã trả lời -> mở đáp án ngay
+    const allActiveAnswered = room.players.size > 0
+      && [...room.players.keys()].every((cid) => g.answers.has(cid));
+    if (allActiveAnswered) {
       this._clearRoomTimer(room);
       this._revealQuizQuestion(room);
     } else {
@@ -893,21 +964,49 @@ class GameRoomManager {
     if (!g || g.gameType !== 'quiz_race' || g.phase !== 'question') return;
 
     const currentQ = g.questions[g.currentIndex];
-    const results = [];
+    const evaluated = [];
 
     for (const [cid, player] of room.players.entries()) {
       const submission = g.answers.get(cid);
       const isCorrect = Boolean(submission && submission.optionIndex === currentQ.answer);
+      const elapsedMs = submission
+        ? Math.max(0, submission.answeredAt - g.questionStartedAt)
+        : null;
+      evaluated.push({ cid, player, submission, isCorrect, elapsedMs });
+    }
+
+    // Xác định người trả lời đúng nhanh nhất duy nhất (khi có từ 2 người trả lời đúng trở lên)
+    const correctEntries = evaluated
+      .filter((item) => item.isCorrect && item.elapsedMs !== null)
+      .sort((a, b) => a.elapsedMs - b.elapsedMs);
+    let fastestClientId = null;
+    if (
+      correctEntries.length >= 2
+      && correctEntries[0].elapsedMs < correctEntries[1].elapsedMs
+    ) {
+      fastestClientId = correctEntries[0].cid;
+    }
+
+    const results = [];
+    for (const item of evaluated) {
+      const { cid, player, submission, isCorrect, elapsedMs } = item;
+      let basePoints = 0;
+      let speedBonus = 0;
+      let streakBonus = 0;
+      let fastestBonus = 0;
+      let streak = 0;
       let gained = 0;
+      const isFastest = cid === fastestClientId;
 
       if (isCorrect) {
-        const elapsed = Math.max(0, submission.answeredAt - g.questionStartedAt);
-        const remainingRatio = Math.max(0, 1 - elapsed / this.timings.quizQuestionMs);
-        const speedBonus = Math.round(remainingRatio * 50);
-        const streak = (g.streaks.get(cid) || 0) + 1;
+        basePoints = 100;
+        const remainingRatio = Math.max(0, Math.min(1, 1 - elapsedMs / this.timings.quizQuestionMs));
+        speedBonus = Math.round(remainingRatio * 50);
+        streak = (g.streaks.get(cid) || 0) + 1;
         g.streaks.set(cid, streak);
-        const streakBonus = streak >= 2 ? (streak - 1) * 15 : 0;
-        gained = 100 + speedBonus + streakBonus;
+        streakBonus = streak >= 2 ? Math.min(20, (streak - 1) * 5) : 0;
+        fastestBonus = isFastest ? 10 : 0;
+        gained = basePoints + speedBonus + streakBonus + fastestBonus;
         player.score += gained;
       } else {
         g.streaks.set(cid, 0);
@@ -920,10 +1019,23 @@ class GameRoomManager {
         optionIndex: submission ? submission.optionIndex : null,
         isCorrect,
         gained,
+        basePoints,
+        speedBonus,
+        streakBonus,
+        fastestBonus,
+        streak,
+        elapsedMs,
+        isFastest,
       });
     }
 
-    results.sort((a, b) => b.gained - a.gained);
+    results.sort((a, b) => {
+      if (a.isCorrect !== b.isCorrect) return a.isCorrect ? -1 : 1;
+      if (b.gained !== a.gained) return b.gained - a.gained;
+      const aTime = a.elapsedMs === null ? Number.POSITIVE_INFINITY : a.elapsedMs;
+      const bTime = b.elapsedMs === null ? Number.POSITIVE_INFINITY : b.elapsedMs;
+      return aTime - bTime;
+    });
     g.phase = 'reveal';
     g.lastRoundResults = results;
     g.endsAt = Date.now() + this.timings.quizRevealMs;
@@ -940,12 +1052,13 @@ class GameRoomManager {
           systemNotice: '🏆 Kết thúc Đố Vui Tốc Độ! Chúc mừng những người chơi dẫn đầu!',
         });
       } else {
+        const nextStart = Date.now();
         room.game.currentIndex += 1;
         room.game.phase = 'question';
         room.game.answers = new Map();
         room.game.lastRoundResults = [];
-        room.game.questionStartedAt = Date.now();
-        room.game.endsAt = Date.now() + this.timings.quizQuestionMs;
+        room.game.questionStartedAt = nextStart;
+        room.game.endsAt = nextStart + this.timings.quizQuestionMs;
         this._broadcastState(room);
         this._setRoomTimer(room, this.timings.quizQuestionMs, () => {
           this._revealQuizQuestion(room);
@@ -1076,7 +1189,7 @@ class GameRoomManager {
     g.endsAt = Date.now() + this.timings.wordChainTurnMs;
   }
 
-  _handleWordChainAction(room, clientId, payload) {
+  _handleWordChainAction(room, clientId, payload, actionTimestamp = Date.now()) {
     const g = room.game;
     if (payload.action !== 'submit_word') return { ok: false, error: 'Hành động không hợp lệ.' };
     if (g.phase !== 'playing') return { ok: false, error: 'Ván chơi đã kết thúc.' };
@@ -1113,7 +1226,7 @@ class GameRoomManager {
 
     // Hợp lệ!
     const player = room.players.get(clientId);
-    const elapsed = Date.now() - g.turnStartedAt;
+    const elapsed = Math.max(0, actionTimestamp - g.turnStartedAt);
     const gained = elapsed <= 6_000 ? 15 : 10;
     if (player) player.score += gained;
 
@@ -1174,6 +1287,7 @@ class GameRoomManager {
       civilianWord,
       spyWord,
       spyIds,
+      participantIds: new Set(playerIds),
       aliveIds: new Set(playerIds),
       eliminatedIds: new Set(),
       clues: new Map(), // clientId -> string
@@ -1288,7 +1402,7 @@ class GameRoomManager {
       g.endsAt = null;
       room.status = 'lobby';
       for (const [cid, player] of room.players.entries()) {
-        if (!g.spyIds.has(cid)) player.score += 25;
+        if (g.participantIds.has(cid) && !g.spyIds.has(cid)) player.score += 25;
       }
       this._broadcastState(room, {
         systemNotice: `${notice} 🎉 DÂN THƯỜNG CHIẾN THẮNG! Từ dân thường: "${g.civilianWord}" • Từ gián điệp: "${g.spyWord}".`,
@@ -1302,7 +1416,7 @@ class GameRoomManager {
       g.endsAt = null;
       room.status = 'lobby';
       for (const [cid, player] of room.players.entries()) {
-        if (g.spyIds.has(cid)) player.score += 35;
+        if (g.participantIds.has(cid) && g.spyIds.has(cid)) player.score += 35;
       }
       this._broadcastState(room, {
         systemNotice: `${notice} 🕵️ GIÁN ĐIỆP CHIẾN THẮNG! Từ dân thường: "${g.civilianWord}" • Từ gián điệp: "${g.spyWord}".`,
@@ -1384,161 +1498,238 @@ class GameRoomManager {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // GAME 4: 💣 ĐẶT BOM SỐ (number_bomb — 2 đến 10 người)
+  // GAME 4: 🃏 ĐẤU TRÍ TÂM LÝ (mind_duel — 2 đến 10 người)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  _armNumberBombRound(room, isFirstRound = false) {
-    const g = room.game;
-    const aliveList = [...g.aliveIds].filter((id) => room.players.has(id));
-    g.bombNumber = Math.floor(Math.random() * 100) + 1; // 1..100
-    g.minBound = 0;   // Đoán hợp lệ > 0 (từ 1)
-    g.maxBound = 101; // Đoán hợp lệ < 101 (đến 100)
-    g.phase = 'playing';
-    g.lastBoom = null;
-    if (!g.turnClientId || !g.aliveIds.has(g.turnClientId)) {
-      g.turnClientId = aliveList[0];
+  _resolveMindDuelPair(moveA, moveB) {
+    if (!moveA && !moveB) return { delta: 0, tag: 'fold' };
+    if (!moveA) return { delta: -15, tag: 'fold' };
+    if (!moveB) return { delta: Math.round(moveA.stake * 0.5), tag: 'walkover' };
+
+    const { card: a, stake: sA } = moveA;
+    const { card: b, stake: sB } = moveB;
+
+    if (a === b) {
+      if (a === 'charge') return { delta: sA, tag: 'mutual_charge' };
+      return { delta: 0, tag: 'clash' };
     }
-    g.endsAt = Date.now() + this.timings.numberBombTurnMs;
 
-    const firstNick = room.players.get(g.turnClientId)?.nickname || 'Người chơi';
-    this._broadcastState(room, {
-      systemNotice: isFirstRound
-        ? `💣 Đặt Bom Số bắt đầu! Quả bom đang ẩn từ 1 đến 100. Lượt của ${firstNick}!`
-        : `💣 Vòng ${g.round}: Quả bom mới đã được đặt trong khoảng 1–100! Lượt của ${firstNick}!`,
-    });
+    if (a === 'attack') {
+      if (b === 'charge') return { delta: sA + sB, tag: 'rob_charge' };
+      if (b === 'bluff') return { delta: sA + Math.round(sB * 0.5), tag: 'crush_bluff' };
+      if (b === 'shield') return { delta: -sA, tag: 'blocked' };
+    }
 
-    this._scheduleNumberBombTimeout(room);
+    if (a === 'shield') {
+      if (b === 'attack') return { delta: sA + Math.round(sB * 0.5), tag: 'counter_shield' };
+      if (b === 'bluff') return { delta: -Math.round(sA * 1.25), tag: 'pierced' };
+      if (b === 'charge') return { delta: 0, tag: 'missed_charge' };
+    }
+
+    if (a === 'bluff') {
+      if (b === 'shield') return { delta: sA + Math.round(sB * 0.75), tag: 'pierce_shield' };
+      if (b === 'attack') return { delta: -sA, tag: 'crushed' };
+      if (b === 'charge') return { delta: 0, tag: 'missed_charge' };
+    }
+
+    if (a === 'charge') {
+      if (b === 'attack') return { delta: -Math.round(sA * 1.5), tag: 'robbed' };
+      return { delta: Math.round(sA * 1.25), tag: 'free_charge' };
+    }
+
+    return { delta: 0, tag: 'clash' };
   }
 
-  _startNumberBomb(room) {
-    const order = shuffleArray([...room.players.keys()]);
+  _formatMindDuelOutcome(move, delta, primaryTag) {
+    if (!move) return '⏰ Bỏ lượt';
+    if (primaryTag === 'rob_charge') return '⚔️ Cướp kho cực gắt!';
+    if (primaryTag === 'crush_bluff') return '⚔️ Phá tan lừa đòn!';
+    if (primaryTag === 'counter_shield') return '🛡️ Phản đòn khiên!';
+    if (primaryTag === 'pierce_shield') return '🎭 Đọc vị xuyên khiên!';
+    if (primaryTag === 'free_charge') return '💰 Gom thưởng trọn vẹn!';
+    if (primaryTag === 'mutual_charge') return '🤝 Cùng gom hòa bình';
+    if (primaryTag === 'robbed') return '💥 Bị cướp sạch kho!';
+    if (primaryTag === 'blocked') return '🛡️ Đâm trúng lá chắn!';
+    if (primaryTag === 'pierced') return '🎭 Bị xuyên khiên!';
+    if (primaryTag === 'crushed') return '💥 Bị bắt bài lừa!';
+    if (primaryTag === 'walkover') return '✨ Đối thủ bỏ lượt';
+    if (delta > 0) return '🔥 Thắng thế vòng này!';
+    if (delta < 0) return '😵 Bị đọc vị!';
+    return '⚖️ Hòa kèo căng thẳng';
+  }
+
+  _beginMindDuelRound(room, isFirstRound = false) {
+    const g = room.game;
+    const now = Date.now();
+    g.phase = 'choose';
+    g.choices = new Map();
+    g.lastRoundResults = [];
+    g.lastRoundSummary = '';
+    g.roundStartedAt = now;
+    g.endsAt = now + this.timings.mindDuelChooseMs;
+
+    const isDouble = g.round === g.totalRounds;
+    const notice = isFirstRound
+      ? `🃏 Đấu Trí Tâm Lý bắt đầu! Mỗi người có ${MIND_DUEL_START_SCORE}đ vốn — chọn lá bài kín & đặt cược qua ${g.totalRounds} vòng (vòng cuối x2 điểm)!`
+      : (isDouble
+        ? `🔥 VÒNG CUỐI (${g.round}/${g.totalRounds}) — NHÂN ĐÔI ĐIỂM (x2)! Cân não chọn bài & cược thật khéo nhé!`
+        : `🃏 Vòng ${g.round}/${g.totalRounds}: Chọn lá bài chiến thuật & mức cược kín!`);
+
+    this._broadcastState(room, { systemNotice: notice });
+
+    this._setRoomTimer(room, this.timings.mindDuelChooseMs, () => {
+      this._revealMindDuelRound(room);
+    });
+  }
+
+  _startMindDuel(room) {
+    for (const player of room.players.values()) {
+      player.score = MIND_DUEL_START_SCORE;
+    }
+
     room.game = {
-      gameType: 'number_bomb',
-      phase: 'playing',
+      gameType: 'mind_duel',
+      matchId: uuidv4(),
+      phase: 'choose',
       round: 1,
-      order,
-      aliveIds: new Set(order),
-      eliminatedIds: new Set(),
-      bombNumber: 50,
-      minBound: 0,
-      maxBound: 101,
-      turnClientId: order[0],
-      endsAt: null,
+      totalRounds: MIND_DUEL_TOTAL_ROUNDS,
+      choices: new Map(), // clientId -> { card, stake, chosenAt }
+      lastRoundResults: [],
+      lastRoundSummary: '',
       history: [],
-      lastBoom: null,
+      roundStartedAt: Date.now(),
+      endsAt: null,
       winnerName: null,
     };
-    this._armNumberBombRound(room, true);
+
+    this._beginMindDuelRound(room, true);
   }
 
-  _advanceNumberBombTurn(room) {
+  _handleMindDuelAction(room, clientId, payload, actionTimestamp = Date.now()) {
     const g = room.game;
-    const currentPos = g.order.indexOf(g.turnClientId);
-    for (let offset = 1; offset <= g.order.length; offset++) {
-      const candidate = g.order[(currentPos + offset) % g.order.length];
-      if (room.players.has(candidate) && g.aliveIds.has(candidate)) {
-        g.turnClientId = candidate;
-        break;
-      }
+    if (payload.action !== 'pick_card') return { ok: false, error: 'Hành động không hợp lệ.' };
+    if (g.phase !== 'choose') return { ok: false, error: 'Đang lật bài, vui lòng chờ vòng tiếp theo!' };
+
+    const card = typeof payload.card === 'string' ? payload.card.trim().toLowerCase() : '';
+    if (!VALID_MIND_DUEL_CARDS.includes(card)) {
+      return { ok: false, error: 'Lá bài chiến thuật không hợp lệ.' };
     }
-    g.endsAt = Date.now() + this.timings.numberBombTurnMs;
-  }
-
-  _triggerNumberBombBlast(room, victimId, reasonText) {
-    const g = room.game;
-    this._clearRoomTimer(room);
-    const victim = room.players.get(victimId);
-    const victimNick = victim ? victim.nickname : 'Một người chơi';
-
-    g.aliveIds.delete(victimId);
-    g.eliminatedIds.add(victimId);
-
-    const survivors = [...g.aliveIds].filter((id) => room.players.has(id));
-    for (const sid of survivors) {
-      const p = room.players.get(sid);
-      if (p) p.score += 15;
+    const stake = payload.stake === undefined ? 20 : Number(payload.stake);
+    if (!VALID_MIND_DUEL_STAKES.includes(stake)) {
+      return { ok: false, error: 'Mức cược phải là 10, 20 hoặc 30 điểm.' };
+    }
+    if (g.choices.has(clientId)) {
+      return { ok: false, error: 'Bạn đã chốt lá bài cho vòng này rồi.' };
     }
 
-    g.lastBoom = {
-      victimId,
-      victimNickname: victimNick,
-      bombNumber: g.bombNumber,
-      reason: reasonText,
-    };
+    const chosenAt = Math.min(Date.now(), Math.max(g.roundStartedAt || Date.now(), actionTimestamp));
+    g.choices.set(clientId, { card, stake, chosenAt });
 
-    if (survivors.length <= 1) {
-      const winner = survivors[0] ? room.players.get(survivors[0]) : null;
-      if (winner) winner.score += 20;
-      g.phase = 'ended';
-      g.endsAt = null;
-      g.winnerName = winner ? winner.nickname : 'Hòa';
-      room.status = 'lobby';
-      this._broadcastState(room, {
-        systemNotice: `💥 BÙM! ${victimNick} ${reasonText} (Số bom: ${g.bombNumber})! 🏆 ${g.winnerName} sống sót cuối cùng và chiến thắng!`,
-      });
-      return;
-    }
-
-    g.phase = 'boom';
-    g.endsAt = Date.now() + this.timings.numberBombBoomMs;
-    this._advanceNumberBombTurn(room);
-    this._broadcastState(room, {
-      systemNotice: `💥 BÙM! ${victimNick} ${reasonText} (Số bom: ${g.bombNumber})! Những người sống sót +15 điểm!`,
-    });
-
-    this._setRoomTimer(room, this.timings.numberBombBoomMs, () => {
-      if (!room.game || room.game.gameType !== 'number_bomb') return;
-      room.game.round += 1;
-      this._armNumberBombRound(room, false);
-    });
-  }
-
-  _scheduleNumberBombTimeout(room) {
-    this._setRoomTimer(room, this.timings.numberBombTurnMs, () => {
-      const g = room.game;
-      if (!g || g.gameType !== 'number_bomb' || g.phase !== 'playing') return;
-      this._triggerNumberBombBlast(room, g.turnClientId, 'hết giờ chọn số');
-    });
-  }
-
-  _handleNumberBombAction(room, clientId, payload) {
-    const g = room.game;
-    if (payload.action !== 'guess_number') return { ok: false, error: 'Hành động không hợp lệ.' };
-    if (g.phase !== 'playing') return { ok: false, error: 'Đang chuyển vòng, vui lòng chờ giây lát.' };
-    if (g.turnClientId !== clientId) return { ok: false, error: 'Chưa đến lượt của bạn!' };
-
-    const num = Number(payload.number);
-    if (!Number.isInteger(num) || num <= g.minBound || num >= g.maxBound) {
-      return {
-        ok: false,
-        error: `Hãy chọn số nguyên từ ${g.minBound + 1} đến ${g.maxBound - 1}!`,
-      };
-    }
-
-    const player = room.players.get(clientId);
-    g.history.push({
-      clientId,
-      nickname: player ? player.nickname : 'Ẩn danh',
-      number: num,
-      boom: num === g.bombNumber,
-    });
-
-    if (num === g.bombNumber) {
-      this._triggerNumberBombBlast(room, clientId, `dẫm trúng bom số ${num}`);
-      return { ok: true };
-    }
-
-    if (num < g.bombNumber) {
-      g.minBound = num;
+    const allActiveLocked = room.players.size > 0
+      && [...room.players.keys()].every((cid) => g.choices.has(cid));
+    if (allActiveLocked) {
+      this._clearRoomTimer(room);
+      this._revealMindDuelRound(room);
     } else {
-      g.maxBound = num;
+      this._broadcastState(room);
+    }
+    return { ok: true };
+  }
+
+  _revealMindDuelRound(room) {
+    const g = room.game;
+    if (!g || g.gameType !== 'mind_duel' || g.phase !== 'choose') return;
+
+    const activePlayers = [...room.players.entries()];
+    const multiplier = g.round === g.totalRounds ? 2 : 1;
+    const results = [];
+
+    for (const [cid, player] of activePlayers) {
+      const myMove = g.choices.get(cid) || null;
+      const opponents = activePlayers.filter(([oid]) => oid !== cid);
+      let rawDelta = 0;
+      let primaryTag = myMove ? 'clash' : 'fold';
+      let strongestAbs = -1;
+
+      if (!myMove) {
+        rawDelta = -15;
+        primaryTag = 'fold';
+      } else if (opponents.length > 0) {
+        let totalPairDelta = 0;
+        for (const [oid] of opponents) {
+          const oppMove = g.choices.get(oid) || null;
+          const pairRes = this._resolveMindDuelPair(myMove, oppMove);
+          totalPairDelta += pairRes.delta;
+          if (Math.abs(pairRes.delta) > strongestAbs) {
+            strongestAbs = Math.abs(pairRes.delta);
+            primaryTag = pairRes.tag;
+          }
+        }
+        rawDelta = Math.round(totalPairDelta / opponents.length);
+      }
+
+      const delta = rawDelta * multiplier;
+      player.score = Math.max(0, (player.score || 0) + delta);
+      const cardMeta = myMove ? MIND_DUEL_CARDS[myMove.card] : null;
+
+      results.push({
+        clientId: cid,
+        nickname: player.nickname,
+        avatar: player.avatar,
+        card: myMove ? myMove.card : null,
+        cardIcon: cardMeta ? cardMeta.icon : '⏰',
+        cardName: cardMeta ? cardMeta.name : 'Bỏ lượt',
+        stake: myMove ? myMove.stake : 0,
+        delta,
+        scoreAfter: player.score,
+        outcomeLabel: this._formatMindDuelOutcome(myMove, delta, primaryTag),
+      });
     }
 
-    if (player) player.score += 5;
-    this._advanceNumberBombTurn(room);
+    results.sort((a, b) => (b.delta - a.delta) || (b.scoreAfter - a.scoreAfter));
+    const topRound = results[0];
+    const summary = topRound && topRound.delta > 0
+      ? `🃏 Vòng ${g.round}${multiplier > 1 ? ' (x2)' : ''}: ${topRound.nickname} bùng nổ với ${topRound.cardIcon} ${topRound.cardName} (+${topRound.delta}đ)!`
+      : `🃏 Vòng ${g.round}${multiplier > 1 ? ' (x2)' : ''}: Kèo cân não — chưa ai bứt phá!`;
+
+    g.phase = 'reveal';
+    g.lastRoundResults = results;
+    g.lastRoundSummary = summary;
+    g.history.push({
+      round: g.round,
+      multiplier,
+      entries: results.map((r) => ({
+        clientId: r.clientId,
+        nickname: r.nickname,
+        card: r.card,
+        cardIcon: r.cardIcon,
+        stake: r.stake,
+        delta: r.delta,
+      })),
+    });
+    g.endsAt = Date.now() + this.timings.mindDuelRevealMs;
+
     this._broadcastState(room);
-    this._scheduleNumberBombTimeout(room);
-    return { ok: true };
+
+    this._setRoomTimer(room, this.timings.mindDuelRevealMs, () => {
+      if (!room.game || room.game.gameType !== 'mind_duel') return;
+      if (room.game.round >= room.game.totalRounds) {
+        const leaderboard = this._buildLeaderboard(room);
+        const champ = leaderboard[0] || null;
+        room.game.phase = 'ended';
+        room.game.endsAt = null;
+        room.game.winnerName = champ ? champ.nickname : 'Hòa';
+        room.status = 'lobby';
+        this._broadcastState(room, {
+          systemNotice: champ
+            ? `🏆 Kết thúc Đấu Trí Tâm Lý! Bậc thầy đọc vị: ${champ.nickname} (${champ.score} điểm)!`
+            : '🃏 Ván Đấu Trí Tâm Lý đã kết thúc!',
+        });
+      } else {
+        room.game.round += 1;
+        this._beginMindDuelRound(room, false);
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1701,9 +1892,15 @@ class GameRoomManager {
     if (!g || g.phase === 'ended') return;
 
     if (g.gameType === 'quiz_race') {
-      if (g.phase === 'question' && g.answers.size >= room.players.size && room.players.size > 0) {
+      if (g.answers) g.answers.delete(clientId);
+      if (g.streaks) g.streaks.delete(clientId);
+      const allActiveAnswered = room.players.size > 0
+        && [...room.players.keys()].every((cid) => g.answers && g.answers.has(cid));
+      if (g.phase === 'question' && allActiveAnswered) {
         this._clearRoomTimer(room);
         this._revealQuizQuestion(room);
+      } else if (g.phase === 'question') {
+        this._broadcastState(room);
       }
       return;
     }
@@ -1731,6 +1928,11 @@ class GameRoomManager {
     if (g.gameType === 'undercover') {
       g.aliveIds.delete(clientId);
       g.eliminatedIds.add(clientId);
+      g.clues.delete(clientId);
+      g.votes.delete(clientId);
+      for (const [voterId, targetId] of [...g.votes.entries()]) {
+        if (targetId === clientId) g.votes.delete(voterId);
+      }
       const aliveSpies = [...g.aliveIds].filter((id) => g.spyIds.has(id));
       const aliveCivilians = [...g.aliveIds].filter((id) => !g.spyIds.has(id));
 
@@ -1740,34 +1942,40 @@ class GameRoomManager {
         g.winnerSide = aliveSpies.length === 0 ? 'civilians' : 'spies';
         g.endsAt = null;
         room.status = 'lobby';
+        for (const [cid, player] of room.players.entries()) {
+          if (!g.participantIds || g.participantIds.has(cid)) {
+            if (g.winnerSide === 'civilians' && !g.spyIds.has(cid)) player.score += 25;
+            if (g.winnerSide === 'spies' && g.spyIds.has(cid)) player.score += 35;
+          }
+        }
         this._broadcastState(room);
-      } else if (g.phase === 'clue' && g.clues.size >= g.aliveIds.size) {
+      } else if (g.phase === 'clue' && [...g.aliveIds].every((id) => g.clues.has(id))) {
         this._clearRoomTimer(room);
         this._beginUndercoverVoting(room);
-      } else if (g.phase === 'vote' && g.votes.size >= g.aliveIds.size) {
+      } else if (g.phase === 'vote' && [...g.aliveIds].every((id) => g.votes.has(id))) {
         this._clearRoomTimer(room);
         this._resolveUndercoverVotes(room);
+      } else {
+        this._broadcastState(room);
       }
       return;
     }
 
-    if (g.gameType === 'number_bomb') {
-      g.aliveIds.delete(clientId);
-      g.eliminatedIds.add(clientId);
-      const survivors = [...g.aliveIds].filter((id) => room.players.has(id));
-      if (survivors.length <= 1) {
+    if (g.gameType === 'mind_duel') {
+      if (g.choices) g.choices.delete(clientId);
+      if (room.players.size <= 1) {
         this._clearRoomTimer(room);
-        const winner = survivors[0] ? room.players.get(survivors[0]) : null;
-        if (winner) winner.score += 20;
+        const winner = [...room.players.values()][0] || null;
         g.phase = 'ended';
         g.endsAt = null;
         g.winnerName = winner ? winner.nickname : 'Hòa';
         room.status = 'lobby';
         this._broadcastState(room);
-      } else if (g.turnClientId === clientId) {
-        this._advanceNumberBombTurn(room);
+      } else if (g.phase === 'choose' && [...room.players.keys()].every((cid) => g.choices.has(cid))) {
+        this._clearRoomTimer(room);
+        this._revealMindDuelRound(room);
+      } else if (g.phase === 'choose') {
         this._broadcastState(room);
-        this._scheduleNumberBombTimeout(room);
       }
       return;
     }
@@ -1808,6 +2016,7 @@ class GameRoomManager {
 module.exports = {
   GameRoomManager,
   GAME_CATALOG,
+  MIND_DUEL_CARDS,
   VALID_GAME_TYPES,
   MAX_GAME_ROOM_PLAYERS,
   MIN_GAME_ROOM_PLAYERS,

@@ -68,6 +68,7 @@ const {
 } = require('./attachmentStorage');
 const { getRandomIcebreaker } = require('./icebreakers');
 const { CompanionBot } = require('./companionBot');
+const groqChat = require('./groqChat');
 const {
   getClientIp,
   isAllowedWsOrigin,
@@ -924,6 +925,10 @@ function deliverGroupMessageLocal(groupId, msgString, excludeClientId = null) {
 
 function handleRemoteGroupEvent(event) {
   if (!event || event.sourceInstanceId === redisManager.instanceId) return;
+  if (event.kind === 'embedded_game_cmd') {
+    handleRemoteEmbeddedGameCmd(event);
+    return;
+  }
   if (event.targetClientId) {
     const c = clients.get(event.targetClientId);
     if (c && c.ws.readyState === 1) {
@@ -933,6 +938,121 @@ function handleRemoteGroupEvent(event) {
   }
   if (event.groupId && event.msgString) {
     deliverGroupMessageLocal(event.groupId, event.msgString, event.excludeClientId || null);
+  }
+}
+
+function publishEmbeddedGameCmd(cmd) {
+  if (!redisManager.enabled || !redisManager.isConnected) return false;
+  redisManager.publishGroupEvent({
+    kind: 'embedded_game_cmd',
+    ...cmd,
+  }).catch((error) => {
+    console.error('[EmbeddedGame] Failed to publish cross-instance command:', error.message);
+  });
+  return true;
+}
+
+function handleRemoteEmbeddedGameCmd(event) {
+  const {
+    contextKey,
+    contextType,
+    groupId = null,
+    command,
+    clientId,
+    userProfile = null,
+    payload = {},
+    receivedAt = Date.now(),
+  } = event || {};
+  if (!contextKey || !command) return;
+
+  const room = embeddedGameManager.getRoomByContext(contextKey);
+  if (!room) return;
+
+  if (command === 'sync_state') {
+    if (!clientId) return;
+    const snap = embeddedGameManager.buildRoomSnapshot(room);
+    sendTo(clientId, serverMsg.chatGameState({
+      ...snap,
+      contextType: room.contextType || contextType || '1v1',
+      contextKey: room.contextKey,
+      groupId: room.contextType === 'group' ? room.contextKey.slice('group:'.length) : null,
+      isBotSession: Boolean(room.isBotSession),
+      allowAnyPlayerControl: Boolean(room.allowAnyPlayerControl),
+      closed: false,
+    }));
+    return;
+  }
+
+  if (command === 'join') {
+    if (!clientId || !userProfile) return;
+    const joinRes = embeddedGameManager.joinRoom(userProfile, { roomId: room.roomId });
+    if (!joinRes.ok) {
+      sendTo(clientId, serverMsg.error(joinRes.code || 'GAME_ROOM_ERROR', joinRes.error));
+      return;
+    }
+    embeddedGameManager.broadcastRoomState(room.roomId, {
+      systemNotice: `🙋 ${joinRes.player.nickname} đã tham gia bàn game (${joinRes.room.playerCount}/${joinRes.room.maxPlayers})!`,
+    });
+    return;
+  }
+
+  if (command === 'leave') {
+    if (!clientId) return;
+    if (room.contextType === 'group' && groupId) {
+      removePlayerFromGroupEmbeddedGame(groupId, clientId);
+    } else if (room.contextType === '1v1') {
+      const chatRoomId = contextKey.slice('chat:'.length);
+      closeEmbedded1v1Game(chatRoomId, { closedByName: payload.closedByName || userProfile?.nickname || null });
+    }
+    return;
+  }
+
+  if (command === 'select') {
+    const res = embeddedGameManager.selectGame(clientId, payload.gameType);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ERROR', res.error));
+    }
+    return;
+  }
+
+  if (command === 'start') {
+    const res = embeddedGameManager.startGame(clientId);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ERROR', res.error));
+    }
+    return;
+  }
+
+  if (command === 'action') {
+    const res = embeddedGameManager.handleAction(clientId, payload, { receivedAt });
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ACTION_ERROR', res.error));
+    }
+    return;
+  }
+
+  if (command === 'close') {
+    if (room.contextType === '1v1') {
+      const chatRoomId = contextKey.slice('chat:'.length);
+      closeEmbedded1v1Game(chatRoomId, {
+        closedByName: payload.closedByName || userProfile?.nickname || null,
+        silent: Boolean(payload.silent),
+      });
+    } else if (room.contextType === 'group' && groupId) {
+      if (room.hostId === clientId) {
+        const hostNick = room.players.get(clientId)?.nickname || userProfile?.nickname || 'Chủ bàn';
+        embeddedGameManager.destroyRoomByContext(contextKey);
+        broadcastToGroup(groupId, serverMsg.chatGameState({
+          contextType: 'group',
+          groupId,
+          closed: true,
+          closedByName: hostNick,
+          systemNotice: `🎮 ${hostNick} đã đóng bàn game trong nhóm.`,
+        }));
+      } else if (room.players.has(clientId)) {
+        removePlayerFromGroupEmbeddedGame(groupId, clientId);
+      }
+    }
   }
 }
 
@@ -1537,34 +1657,74 @@ function scheduleLumiEmbeddedMove(room) {
     return;
   }
 
-  if (g.gameType === 'number_bomb' && g.phase === 'playing') {
-    if (g.turnClientId !== botId) return;
-    const key = `nb:${g.round}:${g.minBound}:${g.maxBound}:${g.history.length}`;
+  if (g.gameType === 'mind_duel' && g.phase === 'choose') {
+    if (g.choices && g.choices.has(botId)) return;
+    const key = `md:${g.matchId || 'm'}:${g.round}`;
     if (room._botScheduledKey === key) return;
     room._botScheduledKey = key;
 
-    const delay = fastMode ? 40 : (1000 + Math.floor(Math.random() * 700));
+    const delay = fastMode ? 40 : (1300 + Math.floor(Math.random() * 1400));
     if (room._botTimer) clearTimeout(room._botTimer);
     room._botTimer = setTimeout(() => {
       room._botTimer = null;
       const curRoom = embeddedGameManager.getRoom(room.roomId);
-      if (!curRoom || !curRoom.game || curRoom.game.gameType !== 'number_bomb' || curRoom.game.phase !== 'playing') return;
-      if (curRoom.game.turnClientId !== botId) return;
+      if (!curRoom || !curRoom.game || curRoom.game.gameType !== 'mind_duel' || curRoom.game.phase !== 'choose') return;
+      if (curRoom.game.choices.has(botId)) return;
 
-      const lo = curRoom.game.minBound + 1;
-      const hi = curRoom.game.maxBound - 1;
-      if (lo > hi) return;
-      const pick = lo + Math.floor(Math.random() * (hi - lo + 1));
-      embeddedGameManager.handleAction(botId, { action: 'guess_number', number: pick });
+      const counterMap = {
+        attack: 'shield',
+        shield: 'bluff',
+        bluff: 'attack',
+        charge: 'attack',
+      };
+      const recentHumanCards = (curRoom.game.history || [])
+        .slice(-2)
+        .map((h) => (h.entries || []).find((e) => e.clientId === humanId)?.card)
+        .filter(Boolean);
+
+      let chosenCard;
+      if (
+        recentHumanCards.length === 2
+        && recentHumanCards[0] === recentHumanCards[1]
+        && counterMap[recentHumanCards[0]]
+        && Math.random() < 0.6
+      ) {
+        chosenCard = counterMap[recentHumanCards[0]];
+      } else {
+        const roll = Math.random();
+        if (roll < 0.28) chosenCard = 'attack';
+        else if (roll < 0.52) chosenCard = 'shield';
+        else if (roll < 0.76) chosenCard = 'bluff';
+        else chosenCard = 'charge';
+      }
+
+      const isFinal = curRoom.game.round === curRoom.game.totalRounds;
+      const stakes = isFinal ? [20, 30, 30] : [10, 20, 20, 30];
+      const chosenStake = stakes[Math.floor(Math.random() * stakes.length)];
+      embeddedGameManager.handleAction(botId, {
+        action: 'pick_card',
+        card: chosenCard,
+        stake: chosenStake,
+      });
     }, delay);
   }
 }
 
-function closeEmbedded1v1Game(chatRoomId, { closedByName = null, silent = false } = {}) {
+function closeEmbedded1v1Game(chatRoomId, { closedByName = null, silent = false, skipRemoteRelay = false } = {}) {
   if (!chatRoomId) return;
   const contextKey = `chat:${chatRoomId}`;
   const existing = embeddedGameManager.getRoomByContext(contextKey);
-  if (!existing) return;
+  if (!existing) {
+    if (!skipRemoteRelay) {
+      publishEmbeddedGameCmd({
+        contextType: '1v1',
+        contextKey,
+        command: 'close',
+        payload: { closedByName, silent },
+      });
+    }
+    return;
+  }
 
   const recipients = [...existing.players.keys()].filter((cid) => !cid.startsWith('bot-companion-'));
   embeddedGameManager.destroyRoomByContext(contextKey);
@@ -1580,6 +1740,31 @@ function closeEmbedded1v1Game(chatRoomId, { closedByName = null, silent = false 
       sendTo(cid, msg);
     }
   }
+}
+
+function sendActiveEmbedded1v1GameIfAny(chatRoomId, clientId) {
+  if (!chatRoomId || !clientId) return;
+  const contextKey = `chat:${chatRoomId}`;
+  const room = embeddedGameManager.getRoomByContext(contextKey);
+  if (!room) {
+    publishEmbeddedGameCmd({
+      contextType: '1v1',
+      contextKey,
+      command: 'sync_state',
+      clientId,
+    });
+    return;
+  }
+  const snap = embeddedGameManager.buildRoomSnapshot(room);
+  sendTo(clientId, serverMsg.chatGameState({
+    ...snap,
+    contextType: '1v1',
+    contextKey: room.contextKey,
+    groupId: null,
+    isBotSession: Boolean(room.isBotSession),
+    allowAnyPlayerControl: Boolean(room.allowAnyPlayerControl),
+    closed: false,
+  }));
 }
 
 function removePlayerFromGroupEmbeddedGame(groupId, clientId) {
@@ -1610,7 +1795,16 @@ function removePlayerFromGroupEmbeddedGame(groupId, clientId) {
 function sendActiveGroupGameIfAny(groupId, clientId) {
   if (!groupId) return;
   const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
-  if (!room) return;
+  if (!room) {
+    publishEmbeddedGameCmd({
+      contextType: 'group',
+      contextKey: `group:${groupId}`,
+      groupId,
+      command: 'sync_state',
+      clientId,
+    });
+    return;
+  }
   const snap = embeddedGameManager.buildRoomSnapshot(room);
   sendTo(clientId, serverMsg.chatGameState({
     ...snap,
@@ -1935,6 +2129,23 @@ function handleMatchFound(entry1, entry2, commonInterests, sharedRoomId = null) 
     null,
     sharedRoomId
   );
+  const createdRoom = roomManager.getRoom(roomId);
+  if (createdRoom) {
+    createdRoom.participantProfiles = new Map([
+      [entry1.clientId, {
+        clientId: entry1.clientId,
+        deviceId: entry1.deviceId || entry1.clientId,
+        nickname: (client1 && client1.nickname) || entry1.nickname || 'Bạn chat',
+        avatar: (client1 && client1.avatar) || '👤',
+      }],
+      [entry2.clientId, {
+        clientId: entry2.clientId,
+        deviceId: entry2.deviceId || entry2.clientId,
+        nickname: (client2 && client2.nickname) || entry2.nickname || 'Bạn chat',
+        avatar: (client2 && client2.avatar) || '👤',
+      }],
+    ]);
+  }
   connectionManager.initRoomSession(roomId, entry1.clientId, entry2.clientId, null);
 
   // Cấp Resume Token riêng cho từng người trong phòng
@@ -2323,6 +2534,7 @@ async function handleResumeSession(temporaryId, payload) {
       clientId: oldId,
       deviceId: oldClient.deviceId,
       nickname: oldClient.nickname,
+      avatar: oldClient.avatar || '🦊',
       interests: [...oldClient.interests],
       mood: oldClient.mood,
       warningCount: oldClient.warningCount || 0,
@@ -2367,6 +2579,9 @@ async function handleResumeSession(temporaryId, payload) {
       type: 'resume_token',
       payload: { token: newToken }
     }));
+
+    // Đồng bộ lại minigame nhúng 1-1 nếu hai người đang chơi dở trước khi mất kết nối
+    sendActiveEmbedded1v1GameIfAny(roomId, oldId);
 
     // 10. Đồng bộ online presence trong Redis
     if (redisManager.enabled) {
@@ -3587,7 +3802,7 @@ const messageHandlers = {
     console.log(`[Server] 🎲 Icebreaker: [${prompt.category}] ${prompt.text} in room ${roomId}`);
   },
 
-  // ── game_invite (mời chơi minigame 1-1: Caro, Đố Vui, Nối Từ, Bom Số) ──
+  // ── game_invite (mời chơi minigame 1-1: Caro, Đố Vui, Nối Từ, Đấu Trí Tâm Lý) ──
   async [CLIENT_TYPES.GAME_INVITE](clientId, payload) {
     if (!(await canPerformGameAction(clientId))) return;
 
@@ -3600,7 +3815,7 @@ const messageHandlers = {
     const gameType = (payload && payload.gameType) || 'caro';
     const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
 
-    // ── Nhánh 1: Các game mới (Đố Vui Tốc Độ, Nối Từ Thần Tốc, Đặt Bom Số) ──
+    // ── Nhánh 1: Các game mới (Đố Vui Tốc Độ, Nối Từ Thần Tốc, Đấu Trí Tâm Lý) ──
     if (gameType !== 'caro') {
       const info = GAME_CATALOG[gameType];
       if (!info) return;
@@ -3708,7 +3923,7 @@ const messageHandlers = {
 
     const gameType = (payload && payload.gameType) || 'caro';
 
-    // ── Nhánh 1: Chấp nhận lời mời chơi game mới (Đố Vui / Nối Từ / Đặt Bom Số) ──
+    // ── Nhánh 1: Chấp nhận lời mời chơi game mới (Đố Vui / Nối Từ / Đấu Trí Tâm Lý) ──
     if (gameType !== 'caro') {
       const info = GAME_CATALOG[gameType];
       if (!info) return;
@@ -3720,7 +3935,8 @@ const messageHandlers = {
       }
 
       const partnerClient = clients.get(partnerId);
-      const hostUser = partnerClient || {
+      const storedPartnerProfile = roomManager.getRoom(roomId)?.participantProfiles?.get(partnerId) || null;
+      const hostUser = partnerClient || storedPartnerProfile || {
         clientId: partnerId,
         deviceId: partnerId,
         nickname: 'Bạn chat',
@@ -3841,7 +4057,8 @@ const messageHandlers = {
 
       // Nếu người chơi kết thúc ván (thắng hoặc hòa)
       if (result.game.status === 'ended') {
-        const comment = result.game.winner === 'X' ? bot.getGameComment('playerWin') : bot.getGameComment('draw');
+        const humanSymbol = result.game.xPlayer === clientId ? 'X' : 'O';
+        const comment = result.game.winner === humanSymbol ? bot.getGameComment('playerWin') : bot.getGameComment('draw');
         setTimeout(() => {
           sendTo(clientId, serverMsg.message(comment, new Date().toISOString()));
         }, 400);
@@ -3853,13 +4070,16 @@ const messageHandlers = {
         setTimeout(() => {
           const currentRoom = roomManager.getRoom(roomId);
           if (!currentRoom || !currentRoom.game || currentRoom.game.status !== 'playing') return;
-          const botMove = bot.computeMove(currentRoom.game.board, 'O', 'X');
+          if (currentRoom.game.turn !== bot.botClientId) return;
+          const botSymbol = currentRoom.game.xPlayer === bot.botClientId ? 'X' : 'O';
+          const humanSymbol = botSymbol === 'X' ? 'O' : 'X';
+          const botMove = bot.computeMove(currentRoom.game.board, botSymbol, humanSymbol);
           if (botMove >= 0) {
             const botResult = roomManager.makeGameMove(roomId, bot.botClientId, botMove);
             if (botResult.ok) {
               sendTo(clientId, serverMsg.gameState({ action: 'update', game: botResult.game }));
               if (botResult.game.status === 'ended') {
-                const comment = botResult.game.winner === 'O' ? bot.getGameComment('botWin') : bot.getGameComment('draw');
+                const comment = botResult.game.winner === botSymbol ? bot.getGameComment('botWin') : bot.getGameComment('draw');
                 setTimeout(() => {
                   sendTo(clientId, serverMsg.message(comment, new Date().toISOString()));
                 }, 400);
@@ -3936,12 +4156,37 @@ const messageHandlers = {
     const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : null;
 
     if (roomManager.isBotRoom(clientId)) {
+      const bot = roomManager.getBot(clientId);
       const game = roomManager.resetGame(roomId, requestedSize);
       if (!game) return;
       sendTo(clientId, serverMsg.gameState({ action: 'start', game }));
+      const botGoesFirst = Boolean(bot && game.turn === bot.botClientId);
       setTimeout(() => {
-        sendTo(clientId, serverMsg.message('Ván mới bắt đầu rồi! Cố lên bạn nhé, bạn đi trước nha 🌟', new Date().toISOString()));
+        if (!clients.has(clientId) || !roomManager.isBotRoom(clientId)) return;
+        sendTo(
+          clientId,
+          serverMsg.message(
+            botGoesFirst
+              ? 'Ván mới bắt đầu rồi! Lượt này Lumi cầm quân X đi trước nha 🌟'
+              : 'Ván mới bắt đầu rồi! Cố lên bạn nhé, bạn cầm quân X đi trước nha 🌟',
+            new Date().toISOString()
+          )
+        );
       }, 300);
+      if (botGoesFirst) {
+        setTimeout(() => {
+          const currentRoom = roomManager.getRoom(roomId);
+          if (!currentRoom || !currentRoom.game || currentRoom.game.status !== 'playing') return;
+          if (currentRoom.game.turn !== bot.botClientId) return;
+          const botMove = bot.computeMove(currentRoom.game.board, 'X', 'O');
+          if (botMove >= 0) {
+            const botResult = roomManager.makeGameMove(roomId, bot.botClientId, botMove);
+            if (botResult.ok) {
+              sendTo(clientId, serverMsg.gameState({ action: 'update', game: botResult.game }));
+            }
+          }
+        }, 650);
+      }
       return;
     }
 
@@ -4659,12 +4904,13 @@ const messageHandlers = {
   },
 
   async [CLIENT_TYPES.GAME_ROOM_ACTION](clientId, payload) {
+    const receivedAt = Date.now();
     const client = clients.get(clientId);
     if (!client || client.state !== 'GAME_ROOM') return;
     if (!(await ensureNotGroupBanned(clientId))) return;
     if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM') return;
 
-    const res = gameRoomManager.handleAction(clientId, payload);
+    const res = gameRoomManager.handleAction(clientId, payload, { receivedAt });
     if (!res.ok) {
       sendTo(clientId, serverMsg.error('GAME_ROOM_ACTION_ERROR', res.error));
     }
@@ -4766,23 +5012,32 @@ const messageHandlers = {
     if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
 
     const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
+    const groupMember = await groupManager.getGroupMember(groupId, clientId);
+    if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING') return;
+    const displayNick = (groupMember && groupMember.nickname) || client.nickname;
+    const userProfile = {
+      clientId,
+      deviceId: client.deviceId,
+      nickname: displayNick,
+      avatar: client.avatar || '🦊',
+    };
+
     if (!room) {
+      if (publishEmbeddedGameCmd({
+        contextType: 'group',
+        contextKey: `group:${groupId}`,
+        groupId,
+        command: 'join',
+        clientId,
+        userProfile,
+      })) {
+        return;
+      }
       sendTo(clientId, serverMsg.error('GAME_ROOM_NOT_FOUND', 'Hiện chưa có bàn game nào đang mở trong nhóm.'));
       return;
     }
 
-    const groupMember = await groupManager.getGroupMember(groupId, clientId);
-    const displayNick = (groupMember && groupMember.nickname) || client.nickname;
-
-    const joinRes = embeddedGameManager.joinRoom(
-      {
-        clientId,
-        deviceId: client.deviceId,
-        nickname: displayNick,
-        avatar: client.avatar || '🦊',
-      },
-      { roomId: room.roomId }
-    );
+    const joinRes = embeddedGameManager.joinRoom(userProfile, { roomId: room.roomId });
     if (!joinRes.ok) {
       sendTo(clientId, serverMsg.error(joinRes.code || 'GAME_ROOM_ERROR', joinRes.error));
       return;
@@ -4798,7 +5053,20 @@ const messageHandlers = {
     if (!client) return;
     if (client.state === 'GROUP_CHATTING') {
       const groupId = groupManager.getGroupId(clientId);
-      if (groupId) removePlayerFromGroupEmbeddedGame(groupId, clientId);
+      if (!groupId) return;
+      const contextKey = `group:${groupId}`;
+      if (embeddedGameManager.getRoomByContext(contextKey)) {
+        removePlayerFromGroupEmbeddedGame(groupId, clientId);
+      } else {
+        publishEmbeddedGameCmd({
+          contextType: 'group',
+          contextKey,
+          groupId,
+          command: 'leave',
+          clientId,
+          userProfile: { clientId, nickname: client.nickname },
+        });
+      }
     } else if (client.state === 'CHATTING') {
       closeEmbedded1v1Game(roomManager.getRoomId(clientId), { closedByName: client.nickname });
     }
@@ -4808,21 +5076,45 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client) return;
 
+    let contextKey = null;
+    let contextType = null;
+    let groupId = null;
+
     if (client.state === 'CHATTING') {
       if (!(await canPerformGameAction(clientId))) return;
       if (payload.gameType === 'undercover') {
         sendTo(clientId, serverMsg.error('GAME_MIN_PLAYERS', 'Trò chơi "Ai Là Gián Điệp?" cần ít nhất 3 người chơi!'));
         return;
       }
+      const chatRoomId = roomManager.getRoomId(clientId);
+      if (!chatRoomId) return;
       if (payload.gameType === 'caro_arena') {
-        const chatRoomId = roomManager.getRoomId(clientId);
         closeEmbedded1v1Game(chatRoomId, { silent: true });
         return messageHandlers[CLIENT_TYPES.GAME_INVITE](clientId, { gameType: 'caro', size: 10 });
       }
+      contextType = '1v1';
+      contextKey = `chat:${chatRoomId}`;
     } else if (client.state === 'GROUP_CHATTING') {
       if (!(await ensureNotGroupBanned(clientId))) return;
+      groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      contextType = 'group';
+      contextKey = `group:${groupId}`;
     } else {
       return;
+    }
+
+    if (!embeddedGameManager.getRoomByContext(contextKey)) {
+      if (publishEmbeddedGameCmd({
+        contextType,
+        contextKey,
+        groupId,
+        command: 'select',
+        clientId,
+        payload,
+      })) {
+        return;
+      }
     }
 
     const res = embeddedGameManager.selectGame(clientId, payload.gameType);
@@ -4835,12 +5127,36 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client) return;
 
+    let contextKey = null;
+    let contextType = null;
+    let groupId = null;
+
     if (client.state === 'CHATTING') {
       if (!(await canPerformGameAction(clientId))) return;
+      const chatRoomId = roomManager.getRoomId(clientId);
+      if (!chatRoomId) return;
+      contextType = '1v1';
+      contextKey = `chat:${chatRoomId}`;
     } else if (client.state === 'GROUP_CHATTING') {
       if (!(await ensureNotGroupBanned(clientId))) return;
+      groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      contextType = 'group';
+      contextKey = `group:${groupId}`;
     } else {
       return;
+    }
+
+    if (!embeddedGameManager.getRoomByContext(contextKey)) {
+      if (publishEmbeddedGameCmd({
+        contextType,
+        contextKey,
+        groupId,
+        command: 'start',
+        clientId,
+      })) {
+        return;
+      }
     }
 
     const res = embeddedGameManager.startGame(clientId);
@@ -4850,18 +5166,45 @@ const messageHandlers = {
   },
 
   async [CLIENT_TYPES.CHAT_GAME_ACTION](clientId, payload) {
+    const receivedAt = Date.now();
     const client = clients.get(clientId);
     if (!client) return;
 
+    let contextKey = null;
+    let contextType = null;
+    let groupId = null;
+
     if (client.state === 'CHATTING') {
       if (!(await canPerformGameAction(clientId))) return;
+      const chatRoomId = roomManager.getRoomId(clientId);
+      if (!chatRoomId) return;
+      contextType = '1v1';
+      contextKey = `chat:${chatRoomId}`;
     } else if (client.state === 'GROUP_CHATTING') {
       if (!(await ensureNotGroupBanned(clientId))) return;
+      groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      contextType = 'group';
+      contextKey = `group:${groupId}`;
     } else {
       return;
     }
 
-    const res = embeddedGameManager.handleAction(clientId, payload);
+    if (!embeddedGameManager.getRoomByContext(contextKey)) {
+      if (publishEmbeddedGameCmd({
+        contextType,
+        contextKey,
+        groupId,
+        command: 'action',
+        clientId,
+        payload,
+        receivedAt,
+      })) {
+        return;
+      }
+    }
+
+    const res = embeddedGameManager.handleAction(clientId, payload, { receivedAt });
     if (!res.ok) {
       sendTo(clientId, serverMsg.error('CHAT_GAME_ACTION_ERROR', res.error));
     }
@@ -4879,11 +5222,22 @@ const messageHandlers = {
     if (client.state === 'GROUP_CHATTING') {
       const groupId = groupManager.getGroupId(clientId);
       if (!groupId) return;
-      const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
-      if (!room) return;
+      const contextKey = `group:${groupId}`;
+      const room = embeddedGameManager.getRoomByContext(contextKey);
+      if (!room) {
+        publishEmbeddedGameCmd({
+          contextType: 'group',
+          contextKey,
+          groupId,
+          command: 'close',
+          clientId,
+          userProfile: { clientId, nickname: client.nickname },
+        });
+        return;
+      }
       if (room.hostId === clientId) {
         const hostNick = room.players.get(clientId)?.nickname || client.nickname;
-        embeddedGameManager.destroyRoomByContext(`group:${groupId}`);
+        embeddedGameManager.destroyRoomByContext(contextKey);
         broadcastToGroup(groupId, serverMsg.chatGameState({
           contextType: 'group',
           groupId,
@@ -5305,13 +5659,15 @@ wss.on('connection', (ws, req) => {
     const handler = messageHandlers[type];
     if (handler) {
 
-      // Các hành động Caro cần xử lý theo thứ tự của từng client
+      // Các hành động game cần xử lý theo thứ tự của từng client (chống race khi bấm nhanh)
       const gameActions = new Set([
         CLIENT_TYPES.GAME_INVITE,
         CLIENT_TYPES.GAME_ACCEPT,
         CLIENT_TYPES.GAME_MOVE,
         CLIENT_TYPES.GAME_RESET,
-        CLIENT_TYPES.GAME_QUIT
+        CLIENT_TYPES.GAME_QUIT,
+        CLIENT_TYPES.GAME_ROOM_ACTION,
+        CLIENT_TYPES.CHAT_GAME_ACTION,
       ]);
 
       if (gameActions.has(type)) {
@@ -5330,7 +5686,7 @@ wss.on('connection', (ws, req) => {
               clientId,
               serverMsg.error(
                 'GAME_PROCESSING_FAILED',
-                'Không thể xử lý thao tác Caro lúc này.'
+                'Không thể xử lý thao tác trò chơi lúc này.'
               )
             );
           });
@@ -5735,6 +6091,6 @@ httpServer.listen(PORT, () => {
   console.log(`  💓 Heartbeat: mỗi ${HEARTBEAT_INTERVAL / 1000}s`);
   console.log(`  👥 GroupChat: tối đa ${groupManager.maxMembers} thành viên/nhóm (giữ nhóm >= ${groupManager.minKeepVotes} phiếu)`);
   console.log(`  🎮 GameRooms: 5 trò chơi nhiều người (2–${gameRoomManager.maxPlayers} người/phòng)`);
-  console.log(`  🤖 Lumi AI:   ${process.env.GROQ_API_KEY ? 'Groq API (bật)' : 'kịch bản offline (chưa có GROQ_API_KEY)'}`);
+  console.log(`  🤖 Lumi AI:   ${groqChat.getProviderSummary()}`);
   console.log('═══════════════════════════════════════════════════');
 });
