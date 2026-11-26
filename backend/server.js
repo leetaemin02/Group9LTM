@@ -11,7 +11,7 @@
 
 'use strict';
 
-require('dotenv').config();
+try { require('dotenv').config(); } catch (_) {}
 
 const http = require('http');
 const fs = require('fs');
@@ -31,10 +31,27 @@ const {
   ERROR_CODES,
   parseMessage,
   validatePayload,
+  createMessage,
   serverMsg,
 } = require('./protocol');
 const Matchmaker = require('./matchmaker');
 const RoomManager = require('./roomManager');
+const {
+  GroupManager,
+  DEFAULT_MAX_GROUP_MEMBERS,
+  MIN_KEEP_VOTES,
+} = require('./groupManager');
+const {
+  GameRoomManager,
+  GAME_CATALOG,
+  MAX_GAME_ROOM_PLAYERS,
+} = require('./gameRoomManager');
+const {
+  ConnectionManager,
+  MAX_PAIR_HISTORY,
+} = require('./connectionManager');
+const { findWordChainReply } = require('./gameData');
+const { stripVietnameseTones } = require('./nicknameResolver');
 const Moderation = require('./moderation');
 const RedisManager = require('./redis/redisManager');
 const caroStore = require('./redis/caroStore');
@@ -47,9 +64,19 @@ const { checkMessageLinks } = require('./safeBrowsing');
 const {
   AttachmentError,
   createAttachmentStorage,
+  createLocalAttachmentStorage,
 } = require('./attachmentStorage');
 const { getRandomIcebreaker } = require('./icebreakers');
 const { CompanionBot } = require('./companionBot');
+const {
+  getClientIp,
+  isAllowedWsOrigin,
+  resolveSafeStaticPath,
+  getSecurityHeaders,
+  normalizeVoiceMime,
+  isValidAudioMagicBytes,
+  SlidingWindowLimiter,
+} = require('./security');
 
 
 // ─── Cấu hình ──────────────────────────────────────────────────────────────
@@ -58,7 +85,33 @@ const PORT = process.env.PORT || 3001;
 const HEARTBEAT_INTERVAL = 30_000; // 30 giây
 const ROOM_RECONNECT_TIMEOUT = 30_000; //giu phong 30s khi mat ket noi
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
-const attachmentStorage = createAttachmentStorage();
+
+// Cấu hình bảo mật (chống IP spoofing, DoS tạo phòng, flood frame)
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+const TRUST_PROXY_HOPS = Math.max(1, Number.parseInt(process.env.TRUST_PROXY_HOPS || '1', 10) || 1);
+const MAX_ACTIVE_GROUPS = Math.max(10, Number.parseInt(process.env.MAX_ACTIVE_GROUPS || '500', 10) || 500);
+const MAX_ACTIVE_GAME_ROOMS = Math.max(10, Number.parseInt(process.env.MAX_ACTIVE_GAME_ROOMS || '300', 10) || 300);
+const MAX_PENDING_CHAT_PER_CLIENT = 10;
+const VOICE_UPLOAD_TIMEOUT_MS = 15_000;
+
+const wsFrameLimiter = new SlidingWindowLimiter({ maxRequests: 60, windowMs: 5_000, maxKeys: 5_000 });
+const resourceCreateLimiter = new SlidingWindowLimiter({ maxRequests: 10, windowMs: 60_000, maxKeys: 5_000 });
+const voiceUploadLimiter = new SlidingWindowLimiter({ maxRequests: 12, windowMs: 60_000, maxKeys: 5_000 });
+const pairCodeIpLimiter = new SlidingWindowLimiter({ maxRequests: 15, windowMs: 60_000, maxKeys: 5_000 });
+
+function isHttpsRequest(req) {
+  if (!req) return false;
+  if (req.socket && req.socket.encrypted) return true;
+  if (TRUST_PROXY) {
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+    return proto === 'https';
+  }
+  return false;
+}
+const azureAttachmentStorage = createAttachmentStorage();
+const attachmentStorage = azureAttachmentStorage.enabled
+  ? azureAttachmentStorage
+  : createLocalAttachmentStorage();
 const pendingAttachmentCompletions = new Set();
 const completedAttachmentTickets = new Map();
 const configuredMaxConcurrentAttachmentUploads = Number(process.env.MAX_CONCURRENT_ATTACHMENT_UPLOADS);
@@ -70,8 +123,61 @@ const MAX_LIFETIME_UPLOAD_BYTES = 500_000_000;
 const MAX_CONVERSATION_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_CONVERSATION_UPLOAD_FILES = 5;
 let activeAttachmentUploads = 0;
-if (!attachmentStorage.enabled) {
-  console.info('[Attachments] Disabled; configure Azure Storage to enable file sharing.');
+
+// Bộ đếm hạn mức upload cục bộ (chỉ dùng khi USE_REDIS=false ở chế độ 1 instance)
+const localUploadQuotaState = {
+  globalBytes: 0,
+  conversations: new Map(), // conversationId -> { bytes: number, files: Set<string> }
+  reservations: new Set(),  // uploadId đã dự trữ (idempotent)
+};
+
+async function reserveAttachmentUploadQuota({ uploadId, conversationId, size }) {
+  if (redisManager.enabled) {
+    if (!redisManager.isConnected) {
+      return { allowed: false, unavailable: true };
+    }
+    return redisManager.reserveAttachmentUpload({
+      uploadId,
+      conversationId,
+      size,
+      globalLimitBytes: MAX_LIFETIME_UPLOAD_BYTES,
+      conversationLimitBytes: MAX_CONVERSATION_UPLOAD_BYTES,
+      conversationFileLimit: MAX_CONVERSATION_UPLOAD_FILES,
+    });
+  }
+
+  if (localUploadQuotaState.reservations.has(uploadId)) {
+    return { allowed: true, alreadyReserved: true };
+  }
+  const conv = localUploadQuotaState.conversations.get(conversationId) || { bytes: 0, files: new Set() };
+  if (localUploadQuotaState.globalBytes + size > MAX_LIFETIME_UPLOAD_BYTES) {
+    return { allowed: false, reason: 'global_limit' };
+  }
+  if (conv.files.size >= MAX_CONVERSATION_UPLOAD_FILES) {
+    return { allowed: false, reason: 'conversation_file_limit' };
+  }
+  if (conv.bytes + size > MAX_CONVERSATION_UPLOAD_BYTES) {
+    return { allowed: false, reason: 'conversation_size_limit' };
+  }
+
+  localUploadQuotaState.globalBytes += size;
+  conv.bytes += size;
+  conv.files.add(uploadId);
+  localUploadQuotaState.conversations.set(conversationId, conv);
+  localUploadQuotaState.reservations.add(uploadId);
+  if (localUploadQuotaState.conversations.size > 2_000) {
+    localUploadQuotaState.conversations.delete(localUploadQuotaState.conversations.keys().next().value);
+  }
+  if (localUploadQuotaState.reservations.size > 10_000) {
+    localUploadQuotaState.reservations.delete(localUploadQuotaState.reservations.values().next().value);
+  }
+  return { allowed: true, alreadyReserved: false };
+}
+
+if (attachmentStorage.mode === 'azure') {
+  console.info(`[Attachments] Enabled via Azure Blob Storage (${process.env.AZURE_STORAGE_ACCOUNT_NAME}/${process.env.AZURE_STORAGE_CONTAINER_NAME || 'chat-attachments'}, skipMalwareScan=${process.env.SKIP_MALWARE_SCAN === 'true'}).`);
+} else {
+  console.info('[Attachments] Azure Storage chưa cấu hình; dùng bộ lưu tạm an toàn trong RAM (chế độ cục bộ).');
 }
 
 /** Giới hạn kết nối */
@@ -101,22 +207,30 @@ const MIME_TYPES = {
 
 // ─── HTTP Server (phục vụ file tĩnh) ──────────────────────────────────────
 
-function writeJsonResponse(res, statusCode, payload) {
+function writeJsonResponse(res, statusCode, payload, req = null) {
   if (res.destroyed || res.writableEnded) return;
   res.writeHead(statusCode, {
+    ...getSecurityHeaders({ isHtml: false, isHttps: isHttpsRequest(req) }),
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
   });
   res.end(JSON.stringify(payload));
 }
 
 async function handleAttachmentUploadRequest(req, res, uploadId) {
+  // Timeout nhàn rỗi 60s (tự reset khi có dữ liệu) để tải video 50MB không bị ngắt nhưng vẫn chặn Slowloris
+  req.setTimeout(60_000, () => {
+    if (!res.writableEnded && !res.destroyed) {
+      writeJsonResponse(res, 408, { error: 'Hết thời gian chờ tải tệp lên.' }, req);
+    }
+    req.destroy();
+  });
+
   const authorization = req.headers.authorization || '';
   const match = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/u.exec(authorization);
   if (!match) {
     req.resume();
-    writeJsonResponse(res, 401, { error: 'Mã tải tệp không hợp lệ.' });
+    writeJsonResponse(res, 401, { error: 'Mã tải tệp không hợp lệ.' }, req);
     return;
   }
 
@@ -128,48 +242,50 @@ async function handleAttachmentUploadRequest(req, res, uploadId) {
     const statusCode = error instanceof AttachmentError ? error.statusCode : 500;
     writeJsonResponse(res, statusCode, {
       error: error instanceof AttachmentError ? error.message : 'Không thể xác thực quyền tải tệp.',
-    });
+    }, req);
     return;
   }
   const declaredLength = Number(req.headers['content-length']);
   if (!Number.isSafeInteger(declaredLength) || declaredLength !== claims.size) {
     req.resume();
-    writeJsonResponse(res, 400, { error: 'Kích thước tải lên không khớp với ticket.' });
+    writeJsonResponse(res, 400, { error: 'Kích thước tải lên không khớp với ticket.' }, req);
     return;
   }
   if (activeAttachmentUploads >= MAX_CONCURRENT_ATTACHMENT_UPLOADS) {
     req.resume();
-    writeJsonResponse(res, 503, { error: 'Máy chủ đang xử lý nhiều tệp. Vui lòng thử lại sau.' });
+    writeJsonResponse(res, 503, { error: 'Máy chủ đang xử lý nhiều tệp. Vui lòng thử lại sau.' }, req);
     return;
   }
 
   const roomId = roomManager.getRoomId(claims.clientId);
   if (!roomId || roomManager.getPartnerId(claims.clientId) !== claims.partnerId) {
     req.resume();
-    writeJsonResponse(res, 409, { error: 'Phòng chat đã kết thúc; không thể tải tệp lên.' });
+    writeJsonResponse(res, 409, { error: 'Phòng chat đã kết thúc; không thể tải tệp lên.' }, req);
     return;
   }
   const conversationId = [claims.clientId, claims.partnerId].sort().join(':');
   if (claims.conversationId !== conversationId) {
     req.resume();
-    writeJsonResponse(res, 401, { error: 'Ticket tải tệp không thuộc phòng chat này.' });
+    writeJsonResponse(res, 401, { error: 'Ticket tải tệp không thuộc phòng chat này.' }, req);
     return;
   }
-  if (!redisManager.enabled || !redisManager.isConnected) {
+  if (redisManager.enabled && !redisManager.isConnected) {
     req.resume();
-    writeJsonResponse(res, 503, { error: 'Hệ thống hạn mức tải tệp tạm thời không khả dụng.' });
+    writeJsonResponse(res, 503, { error: 'Hệ thống hạn mức tải tệp tạm thời không khả dụng.' }, req);
     return;
   }
 
   try {
-    const quota = await redisManager.reserveAttachmentUpload({
+    const quota = await reserveAttachmentUploadQuota({
       uploadId,
       conversationId,
       size: claims.size,
-      globalLimitBytes: MAX_LIFETIME_UPLOAD_BYTES,
-      conversationLimitBytes: MAX_CONVERSATION_UPLOAD_BYTES,
-      conversationFileLimit: MAX_CONVERSATION_UPLOAD_FILES,
     });
+    if (quota.unavailable) {
+      req.resume();
+      writeJsonResponse(res, 503, { error: 'Hệ thống hạn mức tải tệp tạm thời không khả dụng.' }, req);
+      return;
+    }
     if (!quota.allowed) {
       req.resume();
       const error = quota.reason === 'global_limit'
@@ -177,29 +293,30 @@ async function handleAttachmentUploadRequest(req, res, uploadId) {
         : quota.reason === 'conversation_file_limit'
           ? 'Cuộc trò chuyện đã đạt giới hạn 5 tệp.'
           : 'Cuộc trò chuyện đã đạt giới hạn dung lượng 50 MiB.';
-      writeJsonResponse(res, 429, { error });
+      writeJsonResponse(res, 429, { error }, req);
       return;
     }
   } catch (error) {
     req.resume();
     console.error('[Attachments] Could not reserve upload quota:', error.message);
-    writeJsonResponse(res, 503, { error: 'Không thể xác nhận hạn mức tải tệp. Vui lòng thử lại sau.' });
+    writeJsonResponse(res, 503, { error: 'Không thể xác nhận hạn mức tải tệp. Vui lòng thử lại sau.' }, req);
     return;
   }
 
   activeAttachmentUploads += 1;
   attachmentStorage.upload(uploadId, match[1], req)
-    .then((result) => writeJsonResponse(res, 201, result))
+    .then((result) => writeJsonResponse(res, 201, result, req))
     .catch((error) => {
       if (!req.complete) req.resume();
       const statusCode = error instanceof AttachmentError ? error.statusCode : 500;
       if (statusCode >= 500) {
-        console.error('[Attachments] Azure upload failed:', error.message);
+        console.error('[Attachments] Upload failed:', error.message);
       }
       writeJsonResponse(
         res,
         statusCode,
         { error: statusCode >= 500 ? 'Không thể lưu tệp lúc này. Vui lòng thử lại.' : error.message },
+        req,
       );
     })
     .finally(() => {
@@ -207,9 +324,32 @@ async function handleAttachmentUploadRequest(req, res, uploadId) {
     });
 }
 
+function handleLocalAttachmentGetRequest(req, res, uploadId, requestUrl) {
+  if (attachmentStorage.mode !== 'local' || typeof attachmentStorage.getFile !== 'function') {
+    writeJsonResponse(res, 404, { error: 'Không tìm thấy tệp.' }, req);
+    return;
+  }
+  const exp = requestUrl.searchParams.get('exp');
+  const sig = requestUrl.searchParams.get('sig');
+  const item = attachmentStorage.getFile(uploadId, exp, sig);
+  if (!item) {
+    writeJsonResponse(res, 404, { error: 'Liên kết tải tệp không hợp lệ hoặc đã hết hạn.' }, req);
+    return;
+  }
+  res.writeHead(200, {
+    ...getSecurityHeaders({ isHtml: false, isHttps: isHttpsRequest(req) }),
+    'Content-Type': item.contentType,
+    'Content-Length': item.buffer.length,
+    'Content-Disposition': item.disposition,
+    'Cache-Control': 'private, no-store',
+  });
+  res.end(item.buffer);
+}
+
 // ─── Voice Recording Storage (In-Memory với TTL & Dung lượng tối đa) ──────────
 const voiceStorage = new Map();
-const MAX_VOICE_STORAGE_ITEMS = 500;
+const MAX_VOICE_STORAGE_ITEMS = 200;
+const MAX_VOICE_TOTAL_BYTES = 100 * 1024 * 1024; // Tổng RAM tối đa 100MB cho voice in-memory
 const VOICE_TTL_MS = 60 * 60 * 1000; // 1 giờ
 
 const VOICE_REDIS_TTL = 3600;
@@ -261,45 +401,88 @@ async function getVoiceRedis(voiceId) {
 
 const MAX_VOICE_BYTES = 3 * 1024 * 1024; // 3MB tối đa cho 1 đoạn ghi âm
 
-function pruneVoiceStorage() {
+function pruneVoiceStorage(incomingBytes = 0) {
   const now = Date.now();
+  let totalBytes = 0;
   for (const [id, item] of voiceStorage.entries()) {
     if (now - item.createdAt > VOICE_TTL_MS) {
       voiceStorage.delete(id);
+    } else {
+      totalBytes += item.size || (item.buffer ? item.buffer.length : 0);
     }
   }
-  while (voiceStorage.size > MAX_VOICE_STORAGE_ITEMS) {
+  while (
+    voiceStorage.size > 0
+    && (voiceStorage.size >= MAX_VOICE_STORAGE_ITEMS || totalBytes + incomingBytes > MAX_VOICE_TOTAL_BYTES)
+  ) {
     const oldestKey = voiceStorage.keys().next().value;
+    const oldestItem = voiceStorage.get(oldestKey);
+    totalBytes -= (oldestItem && (oldestItem.size || (oldestItem.buffer ? oldestItem.buffer.length : 0))) || 0;
     voiceStorage.delete(oldestKey);
   }
 }
 
 function handleVoiceUploadRequest(req, res) {
+  // 1. Chặn cross-site upload CSRF nếu request có Origin không hợp lệ
+  if (req.headers.origin && !isAllowedWsOrigin(req, process.env.ALLOWED_ORIGINS)) {
+    req.resume();
+    writeJsonResponse(res, 403, { error: 'Origin không được phép tải lên Voice.' }, req);
+    return;
+  }
+
+  // 2. Giới hạn tần suất tải Voice theo IP thật (chống DoS tràn RAM/Redis)
+  const uploaderIp = getClientIp(req, { trustProxy: TRUST_PROXY, trustProxyHops: TRUST_PROXY_HOPS });
+  const rateCheck = voiceUploadLimiter.check(uploaderIp);
+  if (!rateCheck.allowed) {
+    req.resume();
+    writeJsonResponse(res, 429, { error: 'Bạn tải lên quá nhiều đoạn ghi âm. Vui lòng thử lại sau 1 phút.' }, req);
+    return;
+  }
+
+  // 3. Xác thực chặt Content-Type âm thanh cho phép
+  const mimeType = normalizeVoiceMime(req.headers['content-type']);
+  if (!mimeType) {
+    req.resume();
+    writeJsonResponse(res, 415, { error: 'Định dạng âm thanh không được hỗ trợ.' }, req);
+    return;
+  }
+
+  // 4. Từ chối sớm nếu Content-Length vượt quá 3MB
+  const declaredLength = Number(req.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_VOICE_BYTES) {
+    req.resume();
+    writeJsonResponse(res, 413, { error: 'Voice vượt quá giới hạn 3MB.' }, req);
+    return;
+  }
+
   let bodyLength = 0;
-  let tooLarge = false;
+  let aborted = false;
   const chunks = [];
 
-  const rawMime = (req.headers['content-type'] || 'audio/webm')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
+  // Chống Slowloris upload treo kết nối
+  const uploadTimer = setTimeout(() => {
+    if (aborted || res.writableEnded || res.destroyed) return;
+    aborted = true;
+    chunks.length = 0;
+    writeJsonResponse(res, 408, { error: 'Hết thời gian tải lên tin nhắn thoại.' }, req);
+    req.destroy();
+  }, VOICE_UPLOAD_TIMEOUT_MS);
 
-  const mimeType = /^audio\/[a-z0-9.+-]+$/.test(rawMime)
-    ? rawMime
-    : 'audio/webm';
+  const clearUploadTimer = () => clearTimeout(uploadTimer);
 
   req.on('data', (chunk) => {
-    if (tooLarge) return;
+    if (aborted) return;
 
     bodyLength += chunk.length;
 
     if (bodyLength > MAX_VOICE_BYTES) {
-      tooLarge = true;
+      aborted = true;
+      clearUploadTimer();
       chunks.length = 0;
 
       writeJsonResponse(res, 413, {
         error: 'Voice vượt quá giới hạn 3MB.'
-      });
+      }, req);
       return;
     }
 
@@ -307,23 +490,33 @@ function handleVoiceUploadRequest(req, res) {
   });
 
   req.on('end', async () => {
-    if (tooLarge || res.writableEnded || res.destroyed) return;
+    clearUploadTimer();
+    if (aborted || res.writableEnded || res.destroyed) return;
 
     if (bodyLength === 0) {
       writeJsonResponse(res, 400, {
         error: 'Dữ liệu Voice trống.'
-      });
+      }, req);
+      return;
+    }
+
+    const buffer = Buffer.concat(chunks);
+
+    // 5. Xác thực magic bytes nhị phân thực sự (chống upload HTML/JS/exe giả mạo audio)
+    if (!isValidAudioMagicBytes(buffer)) {
+      writeJsonResponse(res, 415, {
+        error: 'Nội dung tệp không khớp định dạng âm thanh hợp lệ.'
+      }, req);
       return;
     }
 
     const voiceId = crypto.randomUUID();
-    const buffer = Buffer.concat(chunks);
 
     try {
       if (redisManager.enabled) {
         await saveVoiceRedis(voiceId, buffer, mimeType);
       } else {
-        pruneVoiceStorage();
+        pruneVoiceStorage(buffer.length);
 
         voiceStorage.set(voiceId, {
           buffer,
@@ -344,22 +537,25 @@ function handleVoiceUploadRequest(req, res) {
         ok: true,
         voiceId,
         url: `/api/voice/${voiceId}`
-      });
+      }, req);
     } catch (error) {
       console.error('[VOICE UPLOAD ERROR]', error.message);
 
       writeJsonResponse(res, 503, {
         error: 'Không thể lưu Voice.'
-      });
+      }, req);
     }
   });
 
   req.on('error', (error) => {
+    clearUploadTimer();
+    aborted = true;
+    chunks.length = 0;
     console.error('[VOICE REQUEST ERROR]', error.message);
 
     writeJsonResponse(res, 500, {
       error: 'Lỗi tải Voice.'
-    });
+    }, req);
   });
 }
 
@@ -372,7 +568,7 @@ async function handleVoiceGetRequest(req, res, voiceId) {
     if (!item) {
       writeJsonResponse(res, 404, {
         error: 'Không tìm thấy Voice.'
-      });
+      }, req);
       return;
     }
 
@@ -383,10 +579,11 @@ async function handleVoiceGetRequest(req, res, voiceId) {
     });
 
     res.writeHead(200, {
-      'Content-Type': item.mimeType,
+      ...getSecurityHeaders({ isHtml: false, isHttps: isHttpsRequest(req) }),
+      'Content-Type': normalizeVoiceMime(item.mimeType) || 'audio/webm',
       'Content-Length': item.buffer.length,
+      'Content-Disposition': 'inline',
       'Cache-Control': 'private, no-store',
-      'X-Content-Type-Options': 'nosniff'
     });
 
     res.end(item.buffer);
@@ -395,15 +592,28 @@ async function handleVoiceGetRequest(req, res, voiceId) {
 
     writeJsonResponse(res, 503, {
       error: 'Không thể lấy Voice từ Redis.'
-    });
+    }, req);
   }
 }
 
 const httpServer = http.createServer((req, res) => {
-  const requestUrl = new URL(req.url, 'http://localhost');
+  const isHttps = isHttpsRequest(req);
+  let requestUrl;
+  try {
+    requestUrl = new URL(req.url || '/', 'http://localhost');
+  } catch {
+    writeJsonResponse(res, 400, { error: 'URL yêu cầu không hợp lệ.' }, req);
+    return;
+  }
+
   const uploadMatch = /^\/api\/attachments\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
   if (req.method === 'POST' && uploadMatch) {
     handleAttachmentUploadRequest(req, res, uploadMatch[1]);
+    return;
+  }
+  const localAttachmentGetMatch = /^\/api\/attachments\/file\/([0-9a-f-]{36})$/iu.exec(requestUrl.pathname);
+  if (req.method === 'GET' && localAttachmentGetMatch) {
+    handleLocalAttachmentGetRequest(req, res, localAttachmentGetMatch[1], requestUrl);
     return;
   }
 
@@ -419,22 +629,25 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // Chỉ cho phép GET
+  // Chỉ cho phép GET cho tài nguyên tĩnh
   if (req.method !== 'GET') {
-    res.writeHead(405);
+    res.writeHead(405, {
+      ...getSecurityHeaders({ isHtml: false, isHttps }),
+      Allow: 'GET, POST',
+      'Content-Type': 'text/plain; charset=utf-8',
+    });
     res.end('Method Not Allowed');
     return;
   }
 
-  let filePath = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
-
-  // Bảo mật: chống path traversal
-  filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
-  const fullPath = path.join(FRONTEND_DIR, filePath);
-
-  // Đảm bảo nằm trong thư mục client
-  if (!fullPath.startsWith(FRONTEND_DIR)) {
-    res.writeHead(403);
+  // Bảo mật: chống path traversal trên đường dẫn gốc trước khi URL chuẩn hóa (chặn .., %2e%2e, dotfile, sibling-prefix)
+  const rawStaticPath = String(req.url || '/').split('?')[0];
+  const fullPath = resolveSafeStaticPath(FRONTEND_DIR, rawStaticPath);
+  if (!fullPath) {
+    res.writeHead(403, {
+      ...getSecurityHeaders({ isHtml: false, isHttps }),
+      'Content-Type': 'text/plain; charset=utf-8',
+    });
     res.end('Forbidden');
     return;
   }
@@ -444,19 +657,33 @@ const httpServer = http.createServer((req, res) => {
 
   fs.readFile(fullPath, (err, data) => {
     if (err) {
-      if (err.code === 'ENOENT') {
-        res.writeHead(404);
+      if (err.code === 'ENOENT' || err.code === 'EISDIR') {
+        res.writeHead(404, {
+          ...getSecurityHeaders({ isHtml: false, isHttps }),
+          'Content-Type': 'text/plain; charset=utf-8',
+        });
         res.end('Not Found');
       } else {
-        res.writeHead(500);
+        res.writeHead(500, {
+          ...getSecurityHeaders({ isHtml: false, isHttps }),
+          'Content-Type': 'text/plain; charset=utf-8',
+        });
         res.end('Internal Server Error');
       }
       return;
     }
-    res.writeHead(200, { 'Content-Type': contentType });
+    res.writeHead(200, {
+      ...getSecurityHeaders({ isHtml: ext === '.html', isHttps }),
+      'Content-Type': contentType,
+    });
     res.end(data);
   });
 });
+
+// Chống Slowloris nhưng vẫn đủ thời gian tải video lên tới 50MB qua /api/attachments/
+httpServer.headersTimeout = 10_000;
+httpServer.requestTimeout = 10 * 60 * 1000;
+httpServer.keepAliveTimeout = 15_000;
 
 // ─── WebSocket Server ──────────────────────────────────────────────────────
 
@@ -465,10 +692,8 @@ const wss = new WebSocketServer({
   maxPayload: 4096, // Giới hạn kích thước payload tối đa 4KB để chống DoS / Memory Exhaustion (CWE-400 / CVE-2020-13935)
   verifyClient: (info, callback) => {
     // ── Bảo vệ chống Cross-Site WebSocket Hijacking (CSWSH - CWE-1385 / OWASP ASVS v4.0) ──
-    const origin = info.origin || (info.req && info.req.headers && info.req.headers.origin);
-    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()) : null;
-
-    if (allowedOrigins && origin && !allowedOrigins.includes(origin)) {
+    if (!isAllowedWsOrigin(info.req, process.env.ALLOWED_ORIGINS)) {
+      const origin = info.origin || (info.req && info.req.headers && info.req.headers.origin) || 'missing';
       console.warn(`[Security] 🚫 Chặn kết nối WebSocket từ Origin trái phép: "${origin}" (CSWSH Defense)`);
       return callback(false, 403, 'Forbidden Origin (CSWSH Prevention - CWE-1385)');
     }
@@ -535,8 +760,64 @@ const redisManager = new RedisManager({
   onRoomLeft: (event) => {
     handleRemoteRoomLeft(event);
   },
+  onGroupEvent: (event) => {
+    handleRemoteGroupEvent(event);
+  },
   onOnlineCount: (count) => {
     broadcastOnlineCount(count);
+  },
+});
+
+const groupManager = new GroupManager({
+  maxMembers: DEFAULT_MAX_GROUP_MEMBERS,
+  minKeepVotes: MIN_KEEP_VOTES,
+  redisManager,
+});
+
+const connectionManager = new ConnectionManager({
+  maxHistory: MAX_PAIR_HISTORY,
+  redisManager,
+});
+
+const gameRoomManager = new GameRoomManager({
+  maxPlayers: MAX_GAME_ROOM_PLAYERS,
+  onBroadcast: (roomId, eventType, payload, excludeClientId = null) => {
+    broadcastToGameRoom(roomId, createMessage(eventType, payload), excludeClientId);
+  },
+  onSendTo: (targetClientId, eventType, payload) => {
+    sendTo(targetClientId, createMessage(eventType, payload));
+  },
+});
+
+const embeddedGameManager = new GameRoomManager({
+  maxPlayers: MAX_GAME_ROOM_PLAYERS,
+  onBroadcast: (embeddedRoomId, _eventType, payload) => {
+    const room = embeddedGameManager.getRoom(embeddedRoomId);
+    if (!room || !room.contextKey) return;
+    const isGroupCtx = room.contextType === 'group';
+    const groupId = isGroupCtx ? room.contextKey.slice('group:'.length) : null;
+    const msg = serverMsg.chatGameState({
+      ...payload,
+      groupId,
+      closed: false,
+    });
+    if (isGroupCtx) {
+      broadcastToGroup(groupId, msg);
+    } else {
+      for (const cid of room.players.keys()) {
+        if (!cid.startsWith('bot-companion-')) {
+          sendTo(cid, msg);
+        }
+      }
+      if (room.isBotSession && room.botClientId) {
+        scheduleLumiEmbeddedMove(room);
+      }
+    }
+  },
+  onSendTo: (targetClientId, _eventType, payload) => {
+    if (!targetClientId.startsWith('bot-companion-')) {
+      sendTo(targetClientId, serverMsg.chatGamePrivate(payload));
+    }
   },
 });
 
@@ -601,6 +882,8 @@ function handleRemoteRoomLeft({ clientId, partnerId, reason, sourceInstanceId })
   const roomId = roomManager.getRoomId(partnerId);
 
   cleanupCaroGame(roomId);
+  closeEmbedded1v1Game(roomId, { silent: true });
+  connectionManager.cleanupRoomSession(roomId);
   cleanupResumeSession(partnerId);
 
   roomManager.removeClient(partnerId);
@@ -622,6 +905,1002 @@ function notifyRoomLeft(clientId, partnerId, reason = null) {
       console.error('[Server] Failed to publish room-left event:', error.message);
     });
   }
+}
+
+// ─── Tiện ích Trò Chuyện Nhóm Ẩn Danh (O(1) Fan-out đa node) ───────────────
+
+function deliverGroupMessageLocal(groupId, msgString, excludeClientId = null) {
+  const localIds = groupManager.getLocalClientIds(groupId);
+  for (const cid of localIds) {
+    if (excludeClientId && cid === excludeClientId) continue;
+    const c = clients.get(cid);
+    if (c && c.ws.readyState === 1) {
+      c.ws.send(msgString);
+    }
+  }
+}
+
+function handleRemoteGroupEvent(event) {
+  if (!event || event.sourceInstanceId === redisManager.instanceId) return;
+  if (event.targetClientId) {
+    const c = clients.get(event.targetClientId);
+    if (c && c.ws.readyState === 1) {
+      c.ws.send(event.msgString);
+    }
+    return;
+  }
+  if (event.groupId && event.msgString) {
+    deliverGroupMessageLocal(event.groupId, event.msgString, event.excludeClientId || null);
+  }
+}
+
+function broadcastToGroup(groupId, msgString, excludeClientId = null) {
+  deliverGroupMessageLocal(groupId, msgString, excludeClientId);
+  if (redisManager.enabled && redisManager.isConnected) {
+    redisManager.publishGroupEvent({
+      groupId,
+      msgString,
+      excludeClientId,
+    }).catch((error) => {
+      console.error('[Group] Failed to publish group event:', error.message);
+    });
+  }
+}
+
+async function ensureNotGroupBanned(clientId) {
+  const client = clients.get(clientId);
+  if (!client) return false;
+
+  if (redisManager.enabled) {
+    return ensureNotRedisBanned(clientId);
+  }
+
+  const localBan = moderation.isBanned(clientId, client.clientIp);
+  if (localBan.banned) {
+    sendTo(clientId, serverMsg.error(
+      ERROR_CODES.BANNED,
+      `Bạn đang bị cấm trong ${localBan.remainingSec} giây nữa.`
+    ));
+    return false;
+  }
+  return true;
+}
+
+async function leaveGroupSession(clientId, { kicked = false, silent = false, reason = null } = {}) {
+  if (!groupManager.isInGroup(clientId)) return null;
+
+  const prevGroupId = groupManager.getGroupId(clientId);
+  const client = clients.get(clientId);
+  let result;
+  try {
+    result = await groupManager.leaveGroup(clientId, { kicked, reason });
+  } catch (error) {
+    console.error(`[Group] Failed to leave group for ${clientId}:`, error.message);
+    return null;
+  }
+
+  if (client && client.state === 'GROUP_CHATTING') {
+    client.state = 'CONNECTED';
+    client.groupId = null;
+  }
+
+  if (prevGroupId) {
+    removePlayerFromGroupEmbeddedGame(prevGroupId, clientId);
+  }
+
+  if (!result) return null;
+
+  if (result.memberCount > 0 && result.member) {
+    broadcastToGroup(
+      result.groupId,
+      serverMsg.groupMemberLeft({
+        groupId: result.groupId,
+        clientId,
+        nickname: result.member.nickname,
+        memberCount: result.memberCount,
+        keepCount: result.keepCount,
+        minKeepVotes: result.minKeepVotes,
+        isKept: result.isKept,
+        kicked,
+        reason,
+      }),
+      clientId
+    );
+  }
+
+  if (!silent && !kicked && client && clients.get(clientId) === client) {
+    let leftReason = 'Bạn đã rời khỏi phòng nhóm.';
+    if (result.destroyed) {
+      leftReason = 'Mọi thành viên đã rời đi và chưa đủ 3 người giữ nhóm, cuộc trò chuyện nhóm đã tự động biến mất.';
+    } else if (result.preserved) {
+      leftReason = 'Nhóm đã được giữ lại vì có ít nhất 3 thành viên đồng ý. Bạn có thể quay lại trò chuyện tiếp bất cứ lúc nào!';
+    }
+    sendTo(clientId, serverMsg.groupLeft({
+      groupId: result.groupId,
+      groupName: result.groupName || '',
+      preserved: result.preserved,
+      destroyed: result.destroyed,
+      keepCount: result.keepCount,
+      minKeepVotes: result.minKeepVotes,
+      isKept: result.isKept,
+      reason: leftReason,
+    }));
+  }
+
+  return result;
+}
+
+async function applyGroupViolationPenalty(clientId, filterResult) {
+  const client = clients.get(clientId);
+  if (!client) return;
+
+  if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
+    if (redisManager.enabled) {
+      let result;
+      try {
+        result = await addViolation(client.deviceId);
+      } catch (error) {
+        console.error('[Group Redis Violation] Không thể ghi nhận vi phạm:', error.message);
+        sendTo(clientId, serverMsg.error(
+          'MODERATION_UNAVAILABLE',
+          'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'
+        ));
+        return;
+      }
+
+      if (!result.banned) {
+        sendTo(clientId, serverMsg.error(
+          'VIOLATION_WARNING',
+          `Cảnh báo (${result.count}/3): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Đủ 3 lần trong 3 giờ sẽ bị cấm 10 phút!`
+        ));
+        return;
+      }
+
+      const banExpiresAt = Date.now() + result.remainingBan * 1000;
+      await leaveGroupSession(clientId, {
+        kicked: true,
+        reason: 'bị buộc rời nhóm do vi phạm tiêu chuẩn cộng đồng',
+      });
+      sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm 3 lần.', banExpiresAt));
+      return;
+    }
+
+    // Chế độ in-memory (không bật Redis)
+    client.warningCount = (client.warningCount || 0) + 1;
+    if (client.warningCount < 3) {
+      sendTo(clientId, serverMsg.error(
+        'VIOLATION_WARNING',
+        `Cảnh báo (${client.warningCount}/3): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Đủ 3 lần sẽ bị cấm 10 phút!`
+      ));
+      return;
+    }
+
+    client.warningCount = 0;
+    const banExpiresAt = moderation.ban(clientId, client.clientIp, 'Vi phạm tiêu chuẩn cộng đồng 3 lần');
+    await leaveGroupSession(clientId, {
+      kicked: true,
+      reason: 'bị buộc rời nhóm do vi phạm tiêu chuẩn cộng đồng',
+    });
+    sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm 3 lần.', banExpiresAt));
+    return;
+  }
+
+  if (filterResult.action === MODERATION_ACTIONS.INSTANT_BAN) {
+    let banExpiresAt;
+    if (redisManager.enabled) {
+      try {
+        const banResult = await instantBan(client.deviceId);
+        banExpiresAt = Date.now() + banResult.remainingBan * 1000;
+      } catch (error) {
+        console.error('[Group Redis Ban] Không thể ghi nhận ban tức thì:', error.message);
+        sendTo(clientId, serverMsg.error(
+          'MODERATION_UNAVAILABLE',
+          'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'
+        ));
+        return;
+      }
+    } else {
+      banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
+    }
+
+    await leaveGroupSession(clientId, {
+      kicked: true,
+      reason: 'bị buộc rời nhóm do vi phạm nghiêm trọng tiêu chuẩn an toàn',
+    });
+    sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
+  }
+}
+
+async function handleGroupTextMessage(clientId, payload) {
+  const client = clients.get(clientId);
+  if (!client || client.state !== 'GROUP_CHATTING') return;
+
+  const groupId = groupManager.getGroupId(clientId);
+  if (!groupId) {
+    client.state = 'CONNECTED';
+    client.groupId = null;
+    sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng nhóm'));
+    return;
+  }
+
+  if (!(await ensureNotGroupBanned(clientId))) return;
+  if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+  if (!moderation.checkRateLimit(clientId)) {
+    sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin quá nhanh, vui lòng chờ'));
+    return;
+  }
+
+  let text = payload.text;
+  const filterResult = checkContent(text);
+  if (filterResult.isViolation) {
+    if (filterResult.action === MODERATION_ACTIONS.MASK) {
+      text = maskProfanity(text);
+    } else if (filterResult.action === MODERATION_ACTIONS.BLOCK_WARN) {
+      sendTo(clientId, serverMsg.error(
+        'MESSAGE_BLOCKED',
+        `Tin nhắn của bạn chứa từ ngữ nhạy cảm ("${filterResult.matched}"). Vui lòng diễn đạt lại để tiếp tục trò chuyện nhé!`
+      ));
+      return;
+    } else {
+      await applyGroupViolationPenalty(clientId, filterResult);
+      return;
+    }
+  }
+
+  const linkSafety = analyzeLinkSafety(text);
+  let reputation;
+  try {
+    reputation = await checkMessageLinks(text);
+  } catch (error) {
+    console.error('[SafeBrowsing] Could not check group message links:', error.message);
+    reputation = { status: 'unavailable', checkedCount: 0, threatTypes: [], complete: false };
+  }
+
+  if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+  const unsafeScheme = linkSafety.reasons.some((reason) => reason.includes('giao thức không an toàn'));
+  const hasLinkSignal = linkSafety.hasLinks || unsafeScheme;
+  const reputationWarning = {
+    hasLinks: hasLinkSignal,
+    suspicious: linkSafety.suspicious || reputation.status === 'threat' || reputation.status === 'limit_exceeded',
+    reasons: [...linkSafety.reasons],
+    reputation: reputation.status,
+    threatTypes: reputation.threatTypes,
+  };
+  if (reputation.status === 'threat') {
+    reputationWarning.source = 'google_safe_browsing';
+  }
+
+  if (reputation.status === 'threat' || reputation.status === 'limit_exceeded' || unsafeScheme) {
+    reputationWarning.blocked = true;
+    if (reputation.status === 'threat') {
+      reputationWarning.blockedReason = 'threat';
+      reputationWarning.reasons.push('Google Safe Browsing đánh dấu liên kết này có thể nguy hiểm.');
+    } else if (reputation.status === 'limit_exceeded') {
+      reputationWarning.blockedReason = 'limit_exceeded';
+      reputationWarning.reasons.push('Tin nhắn vượt quá giới hạn 5 URL được kiểm tra.');
+    } else {
+      reputationWarning.blockedReason = 'unsafe_scheme';
+      reputationWarning.reasons.push('Tin nhắn chứa giao thức liên kết không an toàn.');
+    }
+    sendTo(clientId, serverMsg.linkWarning(reputationWarning));
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const messageLinkSafety = hasLinkSignal && (linkSafety.suspicious || reputation.status === 'threat')
+    ? reputationWarning
+    : null;
+
+  const [groupMember, mentions] = await Promise.all([
+    groupManager.getGroupMember(groupId, clientId),
+    groupManager.extractGroupMentions(groupId, text),
+  ]);
+  const senderNickname = (groupMember && groupMember.nickname) || client.nickname;
+
+  const msgRecord = {
+    id: uuidv4(),
+    type: 'message',
+    groupId,
+    senderClientId: clientId,
+    senderNickname,
+    senderAvatar: client.avatar || '🦊',
+    text,
+    mentions,
+    timestamp,
+    linkSafety: messageLinkSafety,
+  };
+
+  groupManager.recordHistoryMessage(groupId, msgRecord).catch((error) => {
+    console.error('[Group] Failed to record history message:', error.message);
+  });
+
+  broadcastToGroup(groupId, serverMsg.groupMessage(msgRecord), clientId);
+  if (messageLinkSafety) {
+    sendTo(clientId, serverMsg.linkWarning(reputationWarning));
+  }
+}
+
+// ─── Tiện ích Phòng Game Nhiều Người Ẩn Danh (2–10 người) ──────────────────
+
+function broadcastToGameRoom(roomId, msgString, excludeClientId = null) {
+  const clientIds = gameRoomManager.getRoomClientIds(roomId);
+  for (const cid of clientIds) {
+    if (excludeClientId && cid === excludeClientId) continue;
+    const c = clients.get(cid);
+    if (c && c.ws.readyState === 1) {
+      c.ws.send(msgString);
+    }
+  }
+}
+
+function leaveGameRoomSession(clientId, { kicked = false, silent = false, reason = null } = {}) {
+  if (!gameRoomManager.isInGameRoom(clientId)) return null;
+
+  const client = clients.get(clientId);
+  const result = gameRoomManager.leaveRoom(clientId, { kicked, reason });
+
+  if (client && client.state === 'GAME_ROOM') {
+    client.state = 'CONNECTED';
+    client.gameRoomId = null;
+  }
+
+  if (!result) return null;
+
+  if (!result.destroyed && result.player) {
+    broadcastToGameRoom(
+      result.roomId,
+      serverMsg.gameRoomPlayerLeft({
+        roomId: result.roomId,
+        clientId,
+        nickname: result.player.nickname,
+        playerCount: result.playerCount,
+        hostId: result.hostId,
+        hostChanged: result.hostChanged,
+        hostNickname: result.hostNickname,
+        kicked,
+        reason,
+      }),
+      clientId
+    );
+  }
+
+  if (!silent && !kicked && client && clients.get(clientId) === client) {
+    sendTo(clientId, serverMsg.gameRoomLeft({
+      roomId: result.roomId,
+      destroyed: result.destroyed,
+      reason: result.destroyed
+        ? 'Mọi người chơi đã rời đi, phòng game đã tự động đóng.'
+        : 'Bạn đã rời khỏi phòng game.',
+    }));
+  }
+
+  return result;
+}
+
+async function applyGameRoomViolationPenalty(clientId, filterResult) {
+  const client = clients.get(clientId);
+  if (!client) return;
+
+  if (filterResult.action === MODERATION_ACTIONS.STRIKE_BAN) {
+    if (redisManager.enabled) {
+      let result;
+      try {
+        result = await addViolation(client.deviceId);
+      } catch (error) {
+        console.error('[GameRoom Redis Violation]', error.message);
+        sendTo(clientId, serverMsg.error('MODERATION_UNAVAILABLE', 'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'));
+        return;
+      }
+      if (!result.banned) {
+        sendTo(clientId, serverMsg.error(
+          'VIOLATION_WARNING',
+          `Cảnh báo (${result.count}/3): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Đủ 3 lần trong 3 giờ sẽ bị cấm 10 phút!`
+        ));
+        return;
+      }
+      const banExpiresAt = Date.now() + result.remainingBan * 1000;
+      leaveGameRoomSession(clientId, { kicked: true, reason: 'vi phạm tiêu chuẩn cộng đồng' });
+      sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm 3 lần.', banExpiresAt));
+      return;
+    }
+
+    client.warningCount = (client.warningCount || 0) + 1;
+    if (client.warningCount < 3) {
+      sendTo(clientId, serverMsg.error(
+        'VIOLATION_WARNING',
+        `Cảnh báo (${client.warningCount}/3): Tin nhắn vi phạm tiêu chuẩn cộng đồng (${filterResult.category}). Đủ 3 lần sẽ bị cấm 10 phút!`
+      ));
+      return;
+    }
+    client.warningCount = 0;
+    const banExpiresAt = moderation.ban(clientId, client.clientIp, 'Vi phạm tiêu chuẩn cộng đồng 3 lần');
+    leaveGameRoomSession(clientId, { kicked: true, reason: 'vi phạm tiêu chuẩn cộng đồng' });
+    sendTo(clientId, serverMsg.kicked('Bạn đã bị cấm 10 phút do vi phạm 3 lần.', banExpiresAt));
+    return;
+  }
+
+  if (filterResult.action === MODERATION_ACTIONS.INSTANT_BAN) {
+    let banExpiresAt;
+    if (redisManager.enabled) {
+      try {
+        const banResult = await instantBan(client.deviceId);
+        banExpiresAt = Date.now() + banResult.remainingBan * 1000;
+      } catch (error) {
+        console.error('[GameRoom Redis Ban]', error.message);
+        sendTo(clientId, serverMsg.error('MODERATION_UNAVAILABLE', 'Hệ thống kiểm duyệt đang gián đoạn. Tin nhắn chưa được gửi.'));
+        return;
+      }
+    } else {
+      banExpiresAt = moderation.ban(clientId, client.clientIp, filterResult.reason);
+    }
+    leaveGameRoomSession(clientId, { kicked: true, reason: 'vi phạm nghiêm trọng tiêu chuẩn an toàn' });
+    sendTo(clientId, serverMsg.kicked(filterResult.reason, banExpiresAt));
+  }
+}
+
+async function handleGameRoomTextMessage(clientId, payload) {
+  const client = clients.get(clientId);
+  if (!client || client.state !== 'GAME_ROOM') return;
+
+  const roomId = gameRoomManager.getRoomId(clientId);
+  if (!roomId) {
+    client.state = 'CONNECTED';
+    client.gameRoomId = null;
+    sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng game'));
+    return;
+  }
+
+  if (!(await ensureNotGroupBanned(clientId))) return;
+  if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM' || gameRoomManager.getRoomId(clientId) !== roomId) return;
+
+  if (!moderation.checkRateLimit(clientId)) {
+    sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin quá nhanh, vui lòng chờ'));
+    return;
+  }
+
+  let text = payload.text;
+  const filterResult = checkContent(text);
+  if (filterResult.isViolation) {
+    if (filterResult.action === MODERATION_ACTIONS.MASK) {
+      text = maskProfanity(text);
+    } else if (filterResult.action === MODERATION_ACTIONS.BLOCK_WARN) {
+      sendTo(clientId, serverMsg.error(
+        'MESSAGE_BLOCKED',
+        `Tin nhắn của bạn chứa từ ngữ nhạy cảm ("${filterResult.matched}"). Vui lòng diễn đạt lại nhé!`
+      ));
+      return;
+    } else {
+      await applyGameRoomViolationPenalty(clientId, filterResult);
+      return;
+    }
+  }
+
+  const linkSafety = analyzeLinkSafety(text);
+  let reputation;
+  try {
+    reputation = await checkMessageLinks(text);
+  } catch (error) {
+    reputation = { status: 'unavailable', checkedCount: 0, threatTypes: [], complete: false };
+  }
+
+  if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM' || gameRoomManager.getRoomId(clientId) !== roomId) return;
+
+  const unsafeScheme = linkSafety.reasons.some((reason) => reason.includes('giao thức không an toàn'));
+  const hasLinkSignal = linkSafety.hasLinks || unsafeScheme;
+  const reputationWarning = {
+    hasLinks: hasLinkSignal,
+    suspicious: linkSafety.suspicious || reputation.status === 'threat' || reputation.status === 'limit_exceeded',
+    reasons: [...linkSafety.reasons],
+    reputation: reputation.status,
+    threatTypes: reputation.threatTypes,
+  };
+  if (reputation.status === 'threat') reputationWarning.source = 'google_safe_browsing';
+
+  if (reputation.status === 'threat' || reputation.status === 'limit_exceeded' || unsafeScheme) {
+    reputationWarning.blocked = true;
+    if (reputation.status === 'threat') {
+      reputationWarning.blockedReason = 'threat';
+      reputationWarning.reasons.push('Google Safe Browsing đánh dấu URL này có thể nguy hiểm.');
+    } else if (reputation.status === 'limit_exceeded') {
+      reputationWarning.blockedReason = 'limit_exceeded';
+      reputationWarning.reasons.push('Tin nhắn chứa quá 5 liên kết.');
+    } else {
+      reputationWarning.blockedReason = 'unsafe_scheme';
+    }
+    sendTo(clientId, serverMsg.linkWarning(reputationWarning));
+    return;
+  }
+
+  const player = gameRoomManager.getPlayer(roomId, clientId);
+  const senderNickname = (player && player.nickname) || client.nickname;
+  const mentions = gameRoomManager.extractRoomMentions(roomId, text);
+  const timestamp = new Date().toISOString();
+  const messageLinkSafety = hasLinkSignal && (linkSafety.suspicious || reputation.status === 'threat')
+    ? reputationWarning
+    : null;
+
+  broadcastToGameRoom(
+    roomId,
+    serverMsg.gameRoomMessage({
+      id: uuidv4(),
+      roomId,
+      senderClientId: clientId,
+      senderNickname,
+      senderAvatar: client.avatar || '🦊',
+      text,
+      mentions,
+      timestamp,
+      linkSafety: messageLinkSafety,
+    }),
+    clientId
+  );
+
+  if (messageLinkSafety) {
+    sendTo(clientId, serverMsg.linkWarning(reputationWarning));
+  }
+}
+
+// ─── Tiện ích Minigame Nhúng (Chat 1-1 / Lumi AI / Nhóm chat) ──────────────
+
+function getLumiHumanId(room) {
+  for (const cid of room.players.keys()) {
+    if (!cid.startsWith('bot-companion-')) return cid;
+  }
+  return null;
+}
+
+function scheduleLumiEmbeddedMove(room) {
+  if (!room || !room.isBotSession || !room.botClientId || !room.game) return;
+  const g = room.game;
+  const botId = room.botClientId;
+  const humanId = getLumiHumanId(room);
+  const fastMode = process.env.FAST_BOT_GAMES === 'true';
+
+  if (g.phase === 'ended') {
+    const endKey = `ended:${g.gameType}:${room.lastActivityAt}`;
+    if (room._botScheduledKey !== endKey && humanId) {
+      room._botScheduledKey = endKey;
+      setTimeout(() => {
+        if (!clients.has(humanId) || !roomManager.isBotRoom(humanId)) return;
+        sendTo(
+          humanId,
+          serverMsg.message(
+            'Ván này vui quá trời luôn! Bấm "🔄 Chơi ván mới" hoặc "🎮 Đổi game" để chiến tiếp với Lumi nha ✨',
+            new Date().toISOString()
+          )
+        );
+      }, fastMode ? 30 : 600);
+    }
+    return;
+  }
+
+  if (g.gameType === 'quiz_race' && g.phase === 'question') {
+    if (g.answers && g.answers.has(botId)) return;
+    const key = `quiz:${g.currentIndex}`;
+    if (room._botScheduledKey === key) return;
+    room._botScheduledKey = key;
+
+    const delay = fastMode ? 40 : (1700 + Math.floor(Math.random() * 1900));
+    if (room._botTimer) clearTimeout(room._botTimer);
+    room._botTimer = setTimeout(() => {
+      room._botTimer = null;
+      const curRoom = embeddedGameManager.getRoom(room.roomId);
+      if (!curRoom || !curRoom.game || curRoom.game.gameType !== 'quiz_race' || curRoom.game.phase !== 'question') return;
+      if (curRoom.game.answers.has(botId)) return;
+
+      const currentQ = curRoom.game.questions[curRoom.game.currentIndex];
+      if (!currentQ) return;
+      let chosen = currentQ.answer;
+      if (Math.random() > 0.72) {
+        const wrongs = [0, 1, 2, 3].filter((i) => i !== currentQ.answer);
+        chosen = wrongs[Math.floor(Math.random() * wrongs.length)];
+      }
+      embeddedGameManager.handleAction(botId, { action: 'answer', optionIndex: chosen });
+    }, delay);
+    return;
+  }
+
+  if (g.gameType === 'word_chain' && g.phase === 'playing') {
+    if (g.turnClientId !== botId) return;
+    const key = `wc:${g.chain.length}:${g.requiredStart}`;
+    if (room._botScheduledKey === key) return;
+    room._botScheduledKey = key;
+
+    const delay = fastMode ? 40 : (1100 + Math.floor(Math.random() * 700));
+    if (room._botTimer) clearTimeout(room._botTimer);
+    room._botTimer = setTimeout(() => {
+      room._botTimer = null;
+      const curRoom = embeddedGameManager.getRoom(room.roomId);
+      if (!curRoom || !curRoom.game || curRoom.game.gameType !== 'word_chain' || curRoom.game.phase !== 'playing') return;
+      if (curRoom.game.turnClientId !== botId) return;
+
+      const reply = findWordChainReply(curRoom.game.requiredStart, curRoom.game.usedWords, stripVietnameseTones);
+      if (reply) {
+        embeddedGameManager.handleAction(botId, { action: 'submit_word', word: reply });
+      } else {
+        if (humanId && clients.has(humanId)) {
+          sendTo(
+            humanId,
+            serverMsg.message(
+              `Ôi trời âm tiết "${curRoom.game.requiredStart}" khoai quá, Lumi chịu thua lượt này luôn 😅!`,
+              new Date().toISOString()
+            )
+          );
+        }
+        embeddedGameManager.forfeitWordChainTurn(curRoom.roomId, botId, 'bí từ lượt này');
+      }
+    }, delay);
+    return;
+  }
+
+  if (g.gameType === 'number_bomb' && g.phase === 'playing') {
+    if (g.turnClientId !== botId) return;
+    const key = `nb:${g.round}:${g.minBound}:${g.maxBound}:${g.history.length}`;
+    if (room._botScheduledKey === key) return;
+    room._botScheduledKey = key;
+
+    const delay = fastMode ? 40 : (1000 + Math.floor(Math.random() * 700));
+    if (room._botTimer) clearTimeout(room._botTimer);
+    room._botTimer = setTimeout(() => {
+      room._botTimer = null;
+      const curRoom = embeddedGameManager.getRoom(room.roomId);
+      if (!curRoom || !curRoom.game || curRoom.game.gameType !== 'number_bomb' || curRoom.game.phase !== 'playing') return;
+      if (curRoom.game.turnClientId !== botId) return;
+
+      const lo = curRoom.game.minBound + 1;
+      const hi = curRoom.game.maxBound - 1;
+      if (lo > hi) return;
+      const pick = lo + Math.floor(Math.random() * (hi - lo + 1));
+      embeddedGameManager.handleAction(botId, { action: 'guess_number', number: pick });
+    }, delay);
+  }
+}
+
+function closeEmbedded1v1Game(chatRoomId, { closedByName = null, silent = false } = {}) {
+  if (!chatRoomId) return;
+  const contextKey = `chat:${chatRoomId}`;
+  const existing = embeddedGameManager.getRoomByContext(contextKey);
+  if (!existing) return;
+
+  const recipients = [...existing.players.keys()].filter((cid) => !cid.startsWith('bot-companion-'));
+  embeddedGameManager.destroyRoomByContext(contextKey);
+
+  if (!silent) {
+    const msg = serverMsg.chatGameState({
+      contextType: '1v1',
+      closed: true,
+      closedByName,
+      systemNotice: closedByName ? `🎮 ${closedByName} đã đóng trò chơi.` : null,
+    });
+    for (const cid of recipients) {
+      sendTo(cid, msg);
+    }
+  }
+}
+
+function removePlayerFromGroupEmbeddedGame(groupId, clientId) {
+  if (!groupId) return;
+  const contextKey = `group:${groupId}`;
+  const room = embeddedGameManager.getRoomByContext(contextKey);
+  if (!room || !room.players.has(clientId)) return;
+
+  const leftNick = room.players.get(clientId)?.nickname || 'Một thành viên';
+  const res = embeddedGameManager.leaveRoom(clientId);
+  if (!res) return;
+
+  if (res.destroyed) {
+    broadcastToGroup(groupId, serverMsg.chatGameState({
+      contextType: 'group',
+      groupId,
+      closed: true,
+      systemNotice: '🎮 Bàn game trong nhóm đã đóng vì không còn người ngồi chơi.',
+    }));
+  } else {
+    const notice = res.hostChanged && res.hostNickname
+      ? `👋 ${leftNick} đã rời bàn game. 👑 ${res.hostNickname} trở thành chủ bàn mới.`
+      : `👋 ${leftNick} đã rời bàn game (${res.playerCount}/${room.maxPlayers}).`;
+    embeddedGameManager.broadcastRoomState(room.roomId, { systemNotice: notice });
+  }
+}
+
+function sendActiveGroupGameIfAny(groupId, clientId) {
+  if (!groupId) return;
+  const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
+  if (!room) return;
+  const snap = embeddedGameManager.buildRoomSnapshot(room);
+  sendTo(clientId, serverMsg.chatGameState({
+    ...snap,
+    contextType: 'group',
+    contextKey: room.contextKey,
+    groupId,
+    isBotSession: false,
+    allowAnyPlayerControl: false,
+    closed: false,
+  }));
+}
+
+// ─── Tiện ích Giữ kết nối ẩn danh 2 chiều & Mã hẹn gặp lại (1-1) ──────────
+
+function findOnlineClientForPairSlot(pair, targetSlot, excludeClientId = null) {
+  if (!pair || !pair.slots || !pair.slots[targetSlot]) return null;
+  const deviceKey = pair.slots[targetSlot].deviceKey;
+  let fallback = null;
+  for (const c of clients.values()) {
+    if (excludeClientId && c.clientId === excludeClientId) continue;
+    if (c.ws.readyState !== 1) continue;
+    const hasSyncedSlot = Array.isArray(c.syncedPairLinks)
+      && c.syncedPairLinks.some((l) => l.pairId === pair.pairId && l.mySlot === targetSlot);
+    const matchesDevice = Boolean(deviceKey && (c.deviceId === deviceKey || c.clientId === deviceKey));
+    if (hasSyncedSlot || matchesDevice) {
+      if (c.state === 'CONNECTED' || c.state === 'PAIR_WAITING') return c;
+      if (!fallback) fallback = c;
+    }
+  }
+  return fallback;
+}
+
+function getPartnerPresenceForPair(pair, otherSlot, myClientId = null) {
+  const waiting = connectionManager.getWaitingSlot(pair.pairId);
+  if (waiting && waiting.slot === otherSlot && waiting.clientId !== myClientId && clients.has(waiting.clientId)) {
+    return {
+      online: true,
+      busy: false,
+      waitingInPair: true,
+      partnerClient: clients.get(waiting.clientId),
+    };
+  }
+  const partnerClient = findOnlineClientForPairSlot(pair, otherSlot, myClientId);
+  if (!partnerClient) {
+    return { online: false, busy: false, waitingInPair: false, partnerClient: null };
+  }
+  const busy = partnerClient.state === 'CHATTING'
+    || partnerClient.state === 'GROUP_CHATTING'
+    || partnerClient.state === 'GAME_ROOM';
+  return {
+    online: true,
+    busy,
+    waitingInPair: false,
+    partnerClient,
+  };
+}
+
+function leavePairWaiting(clientId) {
+  const client = clients.get(clientId);
+  const removed = connectionManager.clearWaitingByClient(clientId);
+  connectionManager.clearInvitesForClient(clientId);
+  if (client && client.state === 'PAIR_WAITING') {
+    client.state = 'CONNECTED';
+  }
+  if (removed && removed.pairId) {
+    connectionManager._loadPair(removed.pairId, { includeHistory: false })
+      .then((pair) => {
+        if (!pair) return;
+        const otherSlot = removed.slot === 'A' ? 'B' : 'A';
+        const partnerClient = findOnlineClientForPairSlot(pair, otherSlot, clientId);
+        if (partnerClient) {
+          sendTo(partnerClient.clientId, serverMsg.pairPresence({
+            pairId: pair.pairId,
+            partnerOnline: Boolean(clients.has(clientId)),
+            partnerWaitingInPair: false,
+          }));
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+async function notifyPairPartnersPresence(client, isOnline) {
+  if (!client || !Array.isArray(client.syncedPairLinks) || client.syncedPairLinks.length === 0) return;
+  for (const link of client.syncedPairLinks) {
+    try {
+      const pair = await connectionManager._loadPair(link.pairId, { includeHistory: false });
+      if (!pair) continue;
+      const otherSlot = link.mySlot === 'A' ? 'B' : 'A';
+      const partnerClient = findOnlineClientForPairSlot(pair, otherSlot, client.clientId);
+      if (partnerClient) {
+        const waiting = connectionManager.getWaitingSlot(pair.pairId);
+        sendTo(partnerClient.clientId, serverMsg.pairPresence({
+          pairId: pair.pairId,
+          partnerOnline: Boolean(isOnline),
+          partnerWaitingInPair: Boolean(isOnline && waiting && waiting.clientId === client.clientId),
+        }));
+      }
+    } catch (_) {
+      // Bỏ qua lỗi phụ khi gửi presence
+    }
+  }
+}
+
+async function startKeptPairChat(pair, clientA, clientB) {
+  if (!pair || !clientA || !clientB) return;
+
+  // Dọn trạng thái chờ / hàng đợi trước khi mở phòng 1-1
+  for (const c of [clientA, clientB]) {
+    if (c.soloHintTimer) {
+      clearTimeout(c.soloHintTimer);
+      c.soloHintTimer = null;
+    }
+    if (c.state === 'WAITING') matchmaker.dequeue(c.clientId);
+    if (c.state === 'PAIR_WAITING') connectionManager.clearWaitingByClient(c.clientId);
+    if (c.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(c.clientId, { silent: true });
+    } else if (c.state === 'GAME_ROOM') {
+      leaveGameRoomSession(c.clientId, { silent: true });
+    }
+  }
+  connectionManager.clearWaitingPair(pair.pairId);
+  connectionManager.clearInvitesForClient(clientA.clientId);
+  connectionManager.clearInvitesForClient(clientB.clientId);
+
+  if (!clients.has(clientA.clientId) || !clients.has(clientB.clientId)) return;
+
+  // Cập nhật thông tin hiển thị mới nhất cho cả 2 slot
+  await connectionManager.updateSlotProfile(pair, 'A', clientA);
+  await connectionManager.updateSlotProfile(pair, 'B', clientB);
+
+  const freshPair = (await connectionManager._loadPair(pair.pairId, { includeHistory: true })) || pair;
+  const roomId = roomManager.createRoom(clientA.clientId, clientB.clientId, false, null);
+  connectionManager.initRoomSession(roomId, clientA.clientId, clientB.clientId, freshPair);
+
+  const tokenA = resumeSessionManager.createSession(clientA.clientId, roomId);
+  const tokenB = resumeSessionManager.createSession(clientB.clientId, roomId);
+  if (tokenA) sendTo(clientA.clientId, JSON.stringify({ type: 'resume_token', payload: { token: tokenA } }));
+  if (tokenB) sendTo(clientB.clientId, JSON.stringify({ type: 'resume_token', payload: { token: tokenB } }));
+
+  clientA.state = 'CHATTING';
+  clientB.state = 'CHATTING';
+
+  const passA = connectionManager.buildPassForSlot(freshPair, 'A');
+  const passB = connectionManager.buildPassForSlot(freshPair, 'B');
+  sendTo(clientA.clientId, serverMsg.pairKeepPass(passA));
+  sendTo(clientB.clientId, serverMsg.pairKeepPass(passB));
+
+  const commonInterests = (clientA.interests || []).filter((tag) => (clientB.interests || []).includes(tag));
+  const historyA = connectionManager.formatHistoryForSlot(freshPair, 'A');
+  const historyB = connectionManager.formatHistoryForSlot(freshPair, 'B');
+
+  sendTo(clientA.clientId, serverMsg.matchFound(
+    clientB.nickname || freshPair.slots.B.nickname,
+    commonInterests,
+    clientB.mood || freshPair.slots.B.mood,
+    false,
+    {
+      partnerAvatar: clientB.avatar || freshPair.slots.B.avatar || '🦊',
+      keptPair: {
+        pairId: freshPair.pairId,
+        pairCode: freshPair.pairCode,
+        mySlot: 'A',
+        myKeepVote: true,
+        partnerKeepVote: true,
+        isKept: true,
+        historyCount: historyA.length,
+      },
+      history: historyA,
+    }
+  ));
+
+  sendTo(clientB.clientId, serverMsg.matchFound(
+    clientA.nickname || freshPair.slots.A.nickname,
+    commonInterests,
+    clientA.mood || freshPair.slots.A.mood,
+    false,
+    {
+      partnerAvatar: clientA.avatar || freshPair.slots.A.avatar || '🦊',
+      keptPair: {
+        pairId: freshPair.pairId,
+        pairCode: freshPair.pairCode,
+        mySlot: 'B',
+        myKeepVote: true,
+        partnerKeepVote: true,
+        isKept: true,
+        historyCount: historyB.length,
+      },
+      history: historyB,
+    }
+  ));
+
+  console.log(`[Connection] ★ Reconnected kept pair ${freshPair.pairCode}: ${clientA.nickname} ↔ ${clientB.nickname} (restored ${historyA.length} msgs)`);
+}
+
+async function initiatePairReconnect(clientId, pair, slot, otherSlot, { issuedPass = null } = {}) {
+  const client = clients.get(clientId);
+  if (!client) return;
+
+  if (client.state === 'CHATTING') {
+    sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời cuộc trò chuyện 1-1 hiện tại trước khi kết nối lại.'));
+    return;
+  }
+  if (connectionManager.getActiveRoomForPair(pair.pairId)) {
+    sendTo(clientId, serverMsg.error('PAIR_ALREADY_ACTIVE', 'Phòng hẹn của kết nối này hiện đang có đủ 2 người trò chuyện.'));
+    return;
+  }
+
+  if (client.state === 'WAITING') {
+    if (client.soloHintTimer) {
+      clearTimeout(client.soloHintTimer);
+      client.soloHintTimer = null;
+    }
+    matchmaker.dequeue(clientId);
+    client.state = 'CONNECTED';
+  } else if (client.state === 'GROUP_CHATTING') {
+    await leaveGroupSession(clientId, { silent: true });
+    if (clients.get(clientId) !== client) return;
+  } else if (client.state === 'GAME_ROOM') {
+    leaveGameRoomSession(clientId, { silent: true });
+  } else if (client.state === 'PAIR_WAITING') {
+    leavePairWaiting(clientId);
+  }
+
+  await connectionManager.updateSlotProfile(pair, slot, client);
+  if (issuedPass) {
+    sendTo(clientId, serverMsg.pairKeepPass(issuedPass));
+  }
+
+  // Trường hợp 1: Đối phương ĐÃ đợi sẵn trong phòng hẹn -> Ghép ngay tức thì!
+  const waiting = connectionManager.getWaitingSlot(pair.pairId);
+  if (waiting && waiting.slot === otherSlot && waiting.clientId !== clientId) {
+    const waitingClient = clients.get(waiting.clientId);
+    if (waitingClient && waitingClient.ws.readyState === 1) {
+      const clientA = slot === 'A' ? client : waitingClient;
+      const clientB = slot === 'A' ? waitingClient : client;
+      await startKeptPairChat(pair, clientA, clientB);
+      return;
+    }
+    connectionManager.clearWaitingPair(pair.pairId);
+  }
+
+  // Trường hợp 2: Vào phòng hẹn chờ riêng & gửi lời mời nếu đối phương đang online
+  connectionManager.setWaitingSlot(pair.pairId, {
+    clientId,
+    slot,
+    nickname: client.nickname || pair.slots[slot].nickname,
+    avatar: client.avatar || pair.slots[slot].avatar || '🦊',
+  });
+  client.state = 'PAIR_WAITING';
+
+  const presence = getPartnerPresenceForPair(pair, otherSlot, clientId);
+  let invitedPartner = false;
+  if (presence.partnerClient) {
+    const invite = connectionManager.createInvite({
+      pairId: pair.pairId,
+      fromClientId: clientId,
+      fromSlot: slot,
+      toClientId: presence.partnerClient.clientId,
+      toSlot: otherSlot,
+    });
+    sendTo(presence.partnerClient.clientId, serverMsg.pairInvite({
+      inviteId: invite.inviteId,
+      pairId: pair.pairId,
+      pairCode: pair.pairCode,
+      fromNickname: client.nickname || pair.slots[slot].nickname,
+      fromAvatar: client.avatar || pair.slots[slot].avatar || '🦊',
+      historyCount: pair.history ? pair.history.length : 0,
+    }));
+    sendTo(presence.partnerClient.clientId, serverMsg.pairPresence({
+      pairId: pair.pairId,
+      partnerOnline: true,
+      partnerWaitingInPair: true,
+    }));
+    invitedPartner = true;
+  }
+
+  const partnerSlot = pair.slots[otherSlot];
+  const history = connectionManager.formatHistoryForSlot(pair, slot);
+
+  sendTo(clientId, serverMsg.pairWaiting({
+    pairId: pair.pairId,
+    pairCode: pair.pairCode,
+    partnerNickname: partnerSlot.nickname,
+    partnerAvatar: partnerSlot.avatar || '🦊',
+    partnerOnline: Boolean(presence.online),
+    invitedPartner,
+    history,
+    message: invitedPartner
+      ? `💛 Đã gửi lời mời gặp lại đến ${partnerSlot.nickname}! Đang chờ bạn ấy bấm chấp nhận…`
+      : `⏳ ${partnerSlot.nickname} hiện chưa online. Phòng hẹn đang mở (Mã: ${pair.pairCode}) — khi bạn ấy vào lại hoặc nhập mã, hai bạn sẽ tự động kết nối ngay!`,
+  }));
 }
 
 // ─── Xử lý ghép cặp thành công ────────────────────────────────────────────
@@ -654,6 +1933,7 @@ function handleMatchFound(entry1, entry2, commonInterests, sharedRoomId = null) 
     null,
     sharedRoomId
   );
+  connectionManager.initRoomSession(roomId, entry1.clientId, entry2.clientId, null);
 
   // Cấp Resume Token riêng cho từng người trong phòng
   const token1 = client1
@@ -684,10 +1964,14 @@ function handleMatchFound(entry1, entry2, commonInterests, sharedRoomId = null) 
 
   // Mỗi server instance chỉ gửi phản hồi cho kết nối WebSocket mà nó đang quản lý.
   if (client1) {
-    sendTo(entry1.clientId, serverMsg.matchFound(entry2.nickname, commonInterests, entry2.mood));
+    sendTo(entry1.clientId, serverMsg.matchFound(entry2.nickname, commonInterests, entry2.mood, false, {
+      partnerAvatar: (client2 && client2.avatar) || '👤',
+    }));
   }
   if (client2) {
-    sendTo(entry2.clientId, serverMsg.matchFound(entry1.nickname, commonInterests, entry1.mood));
+    sendTo(entry2.clientId, serverMsg.matchFound(entry1.nickname, commonInterests, entry1.mood, false, {
+      partnerAvatar: (client1 && client1.avatar) || '👤',
+    }));
   }
 
   acknowledgeLocalMatches(client1, client2);
@@ -736,8 +2020,20 @@ function startSoloSession(clientId) {
   }
 
   // Nếu đang trong phòng khác -> dọn phòng
+  if (client.state === 'PAIR_WAITING') {
+    leavePairWaiting(clientId);
+  }
   if (client.state === 'CHATTING') {
+    const oldRoomId = roomManager.getRoomId(clientId);
+    closeEmbedded1v1Game(oldRoomId, { closedByName: client.nickname });
+    connectionManager.cleanupRoomSession(oldRoomId);
     roomManager.removeClient(clientId);
+  } else if (client.state === 'GROUP_CHATTING') {
+    leaveGroupSession(clientId, { silent: true }).catch((error) => {
+      console.error('[Group] Failed to leave group before solo:', error.message);
+    });
+  } else if (client.state === 'GAME_ROOM') {
+    leaveGameRoomSession(clientId, { silent: true });
   }
 
   // Khởi tạo Bot instance
@@ -761,6 +2057,18 @@ function startSoloSession(clientId) {
 async function ensureNotRedisBanned(clientId) {
   const client = clients.get(clientId);
   if (!client) return false;
+
+  if (!redisManager.enabled) {
+    const banStatus = moderation.isBanned(clientId, client.clientIp);
+    if (banStatus && banStatus.banned) {
+      sendTo(clientId, serverMsg.error(
+        ERROR_CODES.BANNED,
+        `Bạn đang bị cấm trong ${banStatus.remainingSec} giây nữa.`
+      ));
+      return false;
+    }
+    return true;
+  }
 
   if (!client.deviceId) {
     sendTo(clientId, serverMsg.error(
@@ -1092,12 +2400,20 @@ const messageHandlers = {
     const client = clients.get(clientId);
     if (!client) return;
 
+    // Kiểm duyệt biệt danh chống xúc phạm / spam nội dung vi phạm
+    const nickCheck = checkContent(payload.nickname);
+    if (nickCheck.isViolation) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.INVALID_PAYLOAD, 'Biệt danh chứa nội dung không phù hợp. Vui lòng chọn tên khác.'));
+      return;
+    }
+
     if (client.nickname) {
-      // Đã join rồi → update nickname/interests/mood/deviceId
+      // Đã join rồi → update nickname/interests/mood/deviceId/avatar
       client.nickname = payload.nickname;
       client.interests = payload.interests;
       client.mood = payload.mood || 'ngau_nhien';
       client.deviceId = payload.deviceId || client.deviceId || null;
+      client.avatar = payload.avatar || client.avatar || '🦊';
       console.log(`[Server] Re-join: ${payload.nickname} (${clientId}) [deviceId=${client.deviceId}, mood=${client.mood}]`);
       return;
     }
@@ -1106,6 +2422,7 @@ const messageHandlers = {
     client.interests = payload.interests;
     client.mood = payload.mood || 'ngau_nhien';
     client.deviceId = payload.deviceId || null;
+    client.avatar = payload.avatar || '🦊';
     client.warningCount = client.warningCount || 0; // đếm số lần cảnh cáo vi phạm
     console.log(`[Server] Join: ${payload.nickname} (${clientId}), deviceId=${client.deviceId}, mood=${client.mood}, interests=[${payload.interests.join(', ')}]`);
   },
@@ -1137,8 +2454,11 @@ const messageHandlers = {
       sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_WAITING, 'Bạn đang trong hàng đợi'));
       return;
     }
-    if (client.state === 'CHATTING') {
-      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Bạn đang trong phòng chat'));
+    if (client.state === 'PAIR_WAITING') {
+      leavePairWaiting(clientId);
+    }
+    if (client.state === 'CHATTING' || client.state === 'GROUP_CHATTING' || client.state === 'GAME_ROOM') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Bạn đang trong phòng chat hoặc phòng game'));
       return;
     }
 
@@ -1193,6 +2513,14 @@ const messageHandlers = {
   async [CLIENT_TYPES.MESSAGE](clientId, payload) {
     const client = clients.get(clientId);
     if (!client) return;
+
+    // Định tuyến riêng cho trò chuyện nhóm ẩn danh và phòng game
+    if (client.state === 'GROUP_CHATTING') {
+      return handleGroupTextMessage(clientId, payload);
+    }
+    if (client.state === 'GAME_ROOM') {
+      return handleGameRoomTextMessage(clientId, payload);
+    }
 
     // Kiểm tra người dùng có đang trong phòng chat không
     if (client.state !== 'CHATTING') {
@@ -1454,6 +2782,15 @@ const messageHandlers = {
       && (linkSafety.suspicious || reputation.status === 'threat')
       ? reputationWarning
       : null;
+    const activeChatRoomId = roomManager.getRoomId(clientId);
+    if (activeChatRoomId) {
+      connectionManager.recordRoomMessage(activeChatRoomId, clientId, {
+        type: 'message',
+        text: payload.text,
+        linkSafety: messageLinkSafety,
+        timestamp,
+      }).catch((err) => console.error('[Connection] record text error:', err.message));
+    }
     sendTo(partnerId, serverMsg.message(payload.text, timestamp, messageLinkSafety));
     if (hasLinkSignal && (linkSafety.suspicious || reputation.status === 'threat')) {
       sendTo(clientId, serverMsg.linkWarning(reputationWarning));
@@ -1492,7 +2829,7 @@ const messageHandlers = {
 
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
-    if (!redisManager.enabled || !redisManager.isConnected) {
+    if (redisManager.enabled && !redisManager.isConnected) {
       sendTo(clientId, serverMsg.error(
         'ATTACHMENT_QUOTA_UNAVAILABLE',
         'Hệ thống hạn mức tải tệp đang không khả dụng. Vui lòng thử lại sau.',
@@ -1569,6 +2906,14 @@ const messageHandlers = {
       if (!currentClient || currentClient.state !== 'CHATTING' || roomManager.getPartnerId(clientId) !== partnerId) return;
 
       const timestamp = new Date().toISOString();
+      const attachRoomId = roomManager.getRoomId(clientId);
+      if (attachRoomId) {
+        connectionManager.recordRoomMessage(attachRoomId, clientId, {
+          type: 'attachment',
+          attachment,
+          timestamp,
+        }).catch((err) => console.error('[Connection] record attachment error:', err.message));
+      }
       sendTo(partnerId, serverMsg.attachment(attachment, timestamp));
       sendTo(clientId, serverMsg.attachmentSent(attachment, timestamp));
     } catch (error) {
@@ -1586,7 +2931,50 @@ const messageHandlers = {
   // ── typing ────────────────────────────────────────────
   async [CLIENT_TYPES.TYPING](clientId, payload) {
     const client = clients.get(clientId);
-    if (!client || client.state !== 'CHATTING') return;
+    if (!client) return;
+
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      const now = Date.now();
+      // Giới hạn tần suất gửi trạng thái đang gõ trong phòng đông (tối đa 60 người)
+      if (payload.isTyping && now - (client.lastGroupTypingAt || 0) < 900) return;
+      client.lastGroupTypingAt = now;
+      const member = await groupManager.getGroupMember(groupId, clientId);
+      broadcastToGroup(
+        groupId,
+        serverMsg.groupTyping({
+          groupId,
+          clientId,
+          nickname: (member && member.nickname) || client.nickname,
+          isTyping: payload.isTyping,
+        }),
+        clientId
+      );
+      return;
+    }
+
+    if (client.state === 'GAME_ROOM') {
+      const roomId = gameRoomManager.getRoomId(clientId);
+      if (!roomId) return;
+      const now = Date.now();
+      if (payload.isTyping && now - (client.lastGroupTypingAt || 0) < 900) return;
+      client.lastGroupTypingAt = now;
+      const player = gameRoomManager.getPlayer(roomId, clientId);
+      broadcastToGameRoom(
+        roomId,
+        serverMsg.gameRoomTyping({
+          roomId,
+          clientId,
+          nickname: (player && player.nickname) || client.nickname,
+          isTyping: payload.isTyping,
+        }),
+        clientId
+      );
+      return;
+    }
+
+    if (client.state !== 'CHATTING') return;
 
     // Nếu là phòng Bot thì không cần chuyển tiếp
     if (roomManager.isBotRoom(clientId)) return;
@@ -1617,7 +3005,63 @@ const messageHandlers = {
   // ── voice ─────────────────────────────────────────────
   async [CLIENT_TYPES.VOICE](clientId, payload) {
     const client = clients.get(clientId);
-    if (!client || client.state !== 'CHATTING') {
+    if (!client) return;
+
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      if (!moderation.checkRateLimit(clientId)) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+        return;
+      }
+      if (!(await ensureNotGroupBanned(clientId))) return;
+      if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+      const member = await groupManager.getGroupMember(groupId, clientId);
+      const timestamp = new Date().toISOString();
+      const voiceRecord = {
+        id: uuidv4(),
+        type: 'voice',
+        groupId,
+        senderClientId: clientId,
+        senderNickname: (member && member.nickname) || client.nickname,
+        senderAvatar: client.avatar || '🦊',
+        voiceId: payload.voiceId,
+        url: payload.url,
+        duration: payload.duration,
+        timestamp,
+      };
+      groupManager.recordHistoryMessage(groupId, voiceRecord).catch(() => {});
+      broadcastToGroup(groupId, serverMsg.groupVoice(voiceRecord), clientId);
+      return;
+    }
+
+    if (client.state === 'GAME_ROOM') {
+      const roomId = gameRoomManager.getRoomId(clientId);
+      if (!roomId) return;
+      if (!moderation.checkRateLimit(clientId)) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+        return;
+      }
+      if (!(await ensureNotGroupBanned(clientId))) return;
+      if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM' || gameRoomManager.getRoomId(clientId) !== roomId) return;
+
+      const player = gameRoomManager.getPlayer(roomId, clientId);
+      broadcastToGameRoom(roomId, serverMsg.gameRoomVoice({
+        id: uuidv4(),
+        roomId,
+        senderClientId: clientId,
+        senderNickname: (player && player.nickname) || client.nickname,
+        senderAvatar: client.avatar || '🦊',
+        voiceId: payload.voiceId,
+        url: payload.url,
+        duration: payload.duration,
+        timestamp: new Date().toISOString(),
+      }), clientId);
+      return;
+    }
+
+    if (client.state !== 'CHATTING') {
       sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
       return;
     }
@@ -1667,6 +3111,17 @@ const messageHandlers = {
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
+    const voiceRoomId = roomManager.getRoomId(clientId);
+    if (voiceRoomId) {
+      connectionManager.recordRoomMessage(voiceRoomId, clientId, {
+        type: 'voice',
+        voiceId: payload.voiceId,
+        url: payload.url,
+        duration: payload.duration,
+        timestamp,
+      }).catch((err) => console.error('[Connection] record voice error:', err.message));
+    }
+
     sendTo(partnerId, serverMsg.voice({
       voiceId: payload.voiceId,
       url: payload.url,
@@ -1677,7 +3132,70 @@ const messageHandlers = {
   // ── meme & sticker ────────────────────────────────────
   async [CLIENT_TYPES.MEME](clientId, payload) {
     const client = clients.get(clientId);
-    if (!client || client.state !== 'CHATTING') {
+    if (!client) return;
+
+    if (payload.title && checkContent(payload.title).isViolation) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.INVALID_PAYLOAD, 'Tiêu đề nhãn dán/meme chứa nội dung không phù hợp.'));
+      return;
+    }
+
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      if (!moderation.checkRateLimit(clientId)) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+        return;
+      }
+      if (!(await ensureNotGroupBanned(clientId))) return;
+      if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+      const member = await groupManager.getGroupMember(groupId, clientId);
+      const timestamp = new Date().toISOString();
+      const memeRecord = {
+        id: uuidv4(),
+        type: 'meme',
+        groupId,
+        senderClientId: clientId,
+        senderNickname: (member && member.nickname) || client.nickname,
+        senderAvatar: client.avatar || '🦊',
+        url: payload.url,
+        title: payload.title,
+        memeId: payload.memeId,
+        isSticker: Boolean(payload.isSticker),
+        timestamp,
+      };
+      groupManager.recordHistoryMessage(groupId, memeRecord).catch(() => {});
+      broadcastToGroup(groupId, serverMsg.groupMeme(memeRecord), clientId);
+      return;
+    }
+
+    if (client.state === 'GAME_ROOM') {
+      const roomId = gameRoomManager.getRoomId(clientId);
+      if (!roomId) return;
+      if (!moderation.checkRateLimit(clientId)) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn gửi tin nhắn quá nhanh, vui lòng chờ.'));
+        return;
+      }
+      if (!(await ensureNotGroupBanned(clientId))) return;
+      if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM' || gameRoomManager.getRoomId(clientId) !== roomId) return;
+
+      const player = gameRoomManager.getPlayer(roomId, clientId);
+      broadcastToGameRoom(roomId, serverMsg.gameRoomMeme({
+        id: uuidv4(),
+        roomId,
+        senderClientId: clientId,
+        senderNickname: (player && player.nickname) || client.nickname,
+        senderAvatar: client.avatar || '🦊',
+        url: payload.url,
+        title: payload.title,
+        memeId: payload.memeId,
+        isSticker: Boolean(payload.isSticker),
+        timestamp: new Date().toISOString(),
+      }), clientId);
+      return;
+    }
+
+    if (client.state !== 'CHATTING') {
       sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng chat.'));
       return;
     }
@@ -1733,6 +3251,18 @@ const messageHandlers = {
     const partnerId = roomManager.getPartnerId(clientId);
     if (!partnerId) return;
 
+    const memeRoomId = roomManager.getRoomId(clientId);
+    if (memeRoomId) {
+      connectionManager.recordRoomMessage(memeRoomId, clientId, {
+        type: 'meme',
+        url: payload.url,
+        title: payload.title,
+        memeId: payload.memeId,
+        isSticker,
+        timestamp,
+      }).catch((err) => console.error('[Connection] record meme error:', err.message));
+    }
+
     sendTo(partnerId, serverMsg.meme({
       url: payload.url,
       title: payload.title,
@@ -1772,6 +3302,7 @@ const messageHandlers = {
 
     // Nếu đang ở phòng Bot Đồng Hành -> chuyển sang hàng đợi tìm người thật
     if (roomManager.isBotRoom(clientId)) {
+      closeEmbedded1v1Game(roomBeforeCheck, { silent: true });
       roomManager.removeClient(clientId);
       client.state = 'WAITING';
       sendTo(clientId, serverMsg.waiting());
@@ -1798,6 +3329,8 @@ const messageHandlers = {
 
     const partnerId = roomManager.getPartnerId(clientId);
 
+    closeEmbedded1v1Game(roomBeforeCheck, { silent: true });
+    connectionManager.cleanupRoomSession(roomBeforeCheck);
     cleanupResumeSession(clientId);
     cleanupResumeSession(partnerId);
 
@@ -1830,14 +3363,30 @@ const messageHandlers = {
   },
 
   // ── leave_room (rời phòng quay về trang chủ) ───────────
-  [CLIENT_TYPES.LEAVE_ROOM](clientId) {
+  async [CLIENT_TYPES.LEAVE_ROOM](clientId) {
     const client = clients.get(clientId);
     if (!client) return;
+
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId);
+      return;
+    }
+
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId);
+      return;
+    }
+
+    if (client.state === 'PAIR_WAITING') {
+      leavePairWaiting(clientId);
+      return;
+    }
 
     if (client.state !== 'CHATTING') return;
 
     // Nếu đang ở phòng Bot Đồng Hành Lumi
     if (roomManager.isBotRoom(clientId)) {
+      closeEmbedded1v1Game(roomManager.getRoomId(clientId), { silent: true });
       roomManager.removeClient(clientId);
       client.state = 'CONNECTED';
       console.log(`[Server] Leave Room: ${client.nickname} (${clientId}) rời phòng Bot về trang chủ`);
@@ -1845,8 +3394,11 @@ const messageHandlers = {
     }
 
     // Lấy thông tin đối phương trước khi xóa phòng
+    const leaveRoomId = roomManager.getRoomId(clientId);
     const partnerId = roomManager.getPartnerId(clientId);
 
+    closeEmbedded1v1Game(leaveRoomId, { silent: true });
+    connectionManager.cleanupRoomSession(leaveRoomId);
     // Thu hồi token của cả hai người
     cleanupResumeSession(clientId);
     cleanupResumeSession(partnerId);
@@ -1902,6 +3454,17 @@ const messageHandlers = {
     // Xác nhận cho người report
     sendTo(clientId, serverMsg.reported());
 
+    const reportRoomId = roomManager.getRoomId(clientId);
+    closeEmbedded1v1Game(reportRoomId, { silent: true });
+    // Nếu 2 người từng "Giữ kết nối", báo cáo sẽ tự động xóa vĩnh viễn kết nối đó ở cả 2 phía!
+    const reportPairSess = connectionManager.getRoomSession(reportRoomId);
+    if (reportPairSess && reportPairSess.pairId) {
+      const removedPairId = reportPairSess.pairId;
+      connectionManager.removePairById(removedPairId).catch(() => {});
+      sendTo(clientId, serverMsg.pairRemoved(removedPairId, 'Đã hủy Giữ kết nối sau khi báo cáo vi phạm.'));
+      sendTo(partnerId, serverMsg.pairRemoved(removedPairId, 'Kết nối đã bị hủy.'));
+    }
+    connectionManager.cleanupRoomSession(reportRoomId);
     // Thu hồi token và hủy timer reconnect của cả hai
     cleanupResumeSession(clientId);
     cleanupResumeSession(partnerId);
@@ -1948,7 +3511,25 @@ const messageHandlers = {
   // ── icebreaker (câu hỏi phá băng gợi ý mở đầu) ─────────
   async [CLIENT_TYPES.ICEBREAKER](clientId) {
     const client = clients.get(clientId);
-    if (!client || client.state !== 'CHATTING') return;
+    if (!client) return;
+
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      if (!moderation.checkRateLimit(clientId)) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn thao tác quá nhanh, vui lòng chờ.'));
+        return;
+      }
+      if (!(await ensureNotGroupBanned(clientId))) return;
+      if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+      const member = await groupManager.getGroupMember(groupId, clientId);
+      const prompt = getRandomIcebreaker();
+      broadcastToGroup(groupId, serverMsg.groupIcebreaker(prompt.text, prompt.category, (member && member.nickname) || client.nickname));
+      return;
+    }
+
+    if (client.state !== 'CHATTING') return;
 
 
     // Chỉ kiểm tra Redis Ban khi chat với người thật
@@ -2004,21 +3585,89 @@ const messageHandlers = {
     console.log(`[Server] 🎲 Icebreaker: [${prompt.category}] ${prompt.text} in room ${roomId}`);
   },
 
-  // ── game_invite (mời chơi minigame 1-1) ────────────────
+  // ── game_invite (mời chơi minigame 1-1: Caro, Đố Vui, Nối Từ, Bom Số) ──
   async [CLIENT_TYPES.GAME_INVITE](clientId, payload) {
     if (!(await canPerformGameAction(clientId))) return;
 
     const client = clients.get(clientId);
     if (!client || client.state !== 'CHATTING') return;
 
+    const chatRoomId = roomManager.getRoomId(clientId);
+    if (!chatRoomId) return;
+
+    const gameType = (payload && payload.gameType) || 'caro';
     const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
+
+    // ── Nhánh 1: Các game mới (Đố Vui Tốc Độ, Nối Từ Thần Tốc, Đặt Bom Số) ──
+    if (gameType !== 'caro') {
+      const info = GAME_CATALOG[gameType];
+      if (!info) return;
+
+      // Phòng Bot Lumi -> Bắt đầu chơi ngay lập tức với AI Lumi!
+      if (roomManager.isBotRoom(clientId)) {
+        const bot = roomManager.getBot(clientId);
+        if (!bot) return;
+        roomManager.quitGame(chatRoomId);
+        const botInfo = bot.getPartnerInfo();
+        embeddedGameManager.createEmbeddedSession(`chat:${chatRoomId}`, client, {
+          gameType,
+          maxPlayers: 2,
+          name: `${info.icon} ${info.name} cùng ${botInfo.nickname}`,
+          contextType: '1v1',
+          isBotSession: true,
+          botClientId: bot.botClientId,
+          allowAnyPlayerControl: true,
+          initialPlayers: [{
+            clientId: bot.botClientId,
+            deviceId: bot.botClientId,
+            nickname: botInfo.nickname,
+            avatar: '🤖',
+          }],
+          autoStart: true,
+        });
+        setTimeout(() => {
+          if (!clients.has(clientId) || !roomManager.isBotRoom(clientId)) return;
+          sendTo(
+            clientId,
+            serverMsg.message(
+              `Chốt kèo ${info.icon} ${info.name} luôn nè! Lumi sẵn sàng so tài cùng bạn rồi đó 😉✨`,
+              new Date().toISOString()
+            )
+          );
+        }, 350);
+        return;
+      }
+
+      // Phòng 1-1 người thật -> Gửi lời mời kèm tên trò chơi cho đối phương
+      const partnerId = roomManager.getPartnerId(clientId);
+      if (!partnerId) return;
+
+      sendTo(partnerId, serverMsg.gameState({
+        action: 'invite',
+        gameType,
+        gameName: info.name,
+        gameIcon: info.icon,
+        fromId: clientId,
+        fromName: client.nickname,
+      }));
+
+      sendTo(clientId, serverMsg.gameState({
+        action: 'invite_sent',
+        gameType,
+        gameName: info.name,
+        gameIcon: info.icon,
+      }));
+      return;
+    }
+
+    // ── Nhánh 2: Cờ Caro 1-1 truyền thống (giữ nguyên 100%) ──
+    closeEmbedded1v1Game(chatRoomId, { silent: true });
 
     // Nếu là phòng Bot -> Bot tự động chấp nhận ngay lập tức!
     if (roomManager.isBotRoom(clientId)) {
       const bot = roomManager.getBot(clientId);
       if (!bot) return;
-      const roomId = roomManager.getRoomId(clientId);
-      const game = roomManager.initGame(roomId, clientId, bot.botClientId, requestedSize);
+      const game = roomManager.initGame(chatRoomId, clientId, bot.botClientId, requestedSize);
       sendTo(clientId, serverMsg.gameState({ action: 'start', game }));
       setTimeout(() => {
         sendTo(clientId, serverMsg.message(`Nhận lời thách đấu luôn nè! Bàn cờ Caro ${game.size}x${game.size} (${game.winLength} ô liên tiếp để thắng), bạn cầm quân X đi trước nhé 😉`, new Date().toISOString()));
@@ -2031,6 +3680,7 @@ const messageHandlers = {
 
     sendTo(partnerId, serverMsg.gameState({
       action: 'invite',
+      gameType: 'caro',
       fromId: clientId,
       fromName: client.nickname,
       size: requestedSize,
@@ -2038,11 +3688,12 @@ const messageHandlers = {
 
     sendTo(clientId, serverMsg.gameState({
       action: 'invite_sent',
+      gameType: 'caro',
       size: requestedSize,
     }));
   },
 
-  // ── game_accept (nhận lời chơi minigame) ──────────────
+  // ── game_accept (nhận lời chơi minigame 1-1) ──────────
   async [CLIENT_TYPES.GAME_ACCEPT](clientId, payload) {
     if (!(await canPerformGameAction(clientId))) return;
 
@@ -2052,6 +3703,43 @@ const messageHandlers = {
     const roomId = roomManager.getRoomId(clientId);
     const partnerId = roomManager.getPartnerId(clientId);
     if (!roomId || !partnerId) return;
+
+    const gameType = (payload && payload.gameType) || 'caro';
+
+    // ── Nhánh 1: Chấp nhận lời mời chơi game mới (Đố Vui / Nối Từ / Đặt Bom Số) ──
+    if (gameType !== 'caro') {
+      const info = GAME_CATALOG[gameType];
+      if (!info) return;
+
+      // Đóng bàn Caro cũ nếu đang mở
+      roomManager.quitGame(roomId);
+      if (redisManager.enabled) {
+        caroStore.quitGame(redisManager, roomId).catch(() => {});
+      }
+
+      const partnerClient = clients.get(partnerId);
+      const hostUser = partnerClient || {
+        clientId: partnerId,
+        deviceId: partnerId,
+        nickname: 'Bạn chat',
+        avatar: '👤',
+      };
+
+      embeddedGameManager.createEmbeddedSession(`chat:${roomId}`, hostUser, {
+        gameType,
+        maxPlayers: 2,
+        name: `${info.icon} ${info.name} (1-1)`,
+        contextType: '1v1',
+        isBotSession: false,
+        allowAnyPlayerControl: true,
+        initialPlayers: [client],
+        autoStart: true,
+      });
+      return;
+    }
+
+    // ── Nhánh 2: Chấp nhận cờ Caro 1-1 truyền thống ──
+    closeEmbedded1v1Game(roomId, { silent: true });
 
     const requestedSize = (payload && [10, 15, 20].includes(payload.size)) ? payload.size : 10;
 
@@ -2385,12 +4073,1112 @@ const messageHandlers = {
       );
     }
   },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // TRÒ CHUYỆN NHÓM ẨN DANH (TỐI ĐA 60 THÀNH VIÊN / TỰ BIẾN MẤT / GIỮ >= 3)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async [CLIENT_TYPES.GROUP_FIND](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (payload.topic) {
+      const topicCheck = checkContent(payload.topic);
+      if (topicCheck.isViolation) {
+        sendTo(clientId, serverMsg.error('INVALID_PAYLOAD', 'Chủ đề nhóm chứa nội dung không phù hợp. Vui lòng chọn chủ đề khác.'));
+        return;
+      }
+    }
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi vào nhóm.'));
+      return;
+    }
+
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+
+    let excludeGroupId = payload.excludeGroupId || null;
+    if (client.state === 'GROUP_CHATTING') {
+      excludeGroupId = groupManager.getGroupId(clientId) || excludeGroupId;
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+
+    if (redisManager.enabled) {
+      try {
+        await redisManager.addOnlineClient(clientId);
+      } catch (error) {
+        sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Hệ thống phòng nhóm đang khởi động hoặc tạm thời gián đoạn. Vui lòng thử lại.'));
+        return;
+      }
+      if (clients.get(clientId) !== client) return;
+    }
+
+    let result;
+    try {
+      result = await groupManager.findOrCreateGroup(client, {
+        ...payload,
+        excludeGroupId,
+      });
+    } catch (error) {
+      console.error('[Group] findOrCreateGroup error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể tìm nhóm lúc này. Vui lòng thử lại sau.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GROUP_ERROR', result.error));
+      return;
+    }
+
+    client.state = 'GROUP_CHATTING';
+    client.groupId = result.group.groupId;
+
+    sendTo(clientId, serverMsg.groupJoined(result.group));
+    if (!result.created) {
+      broadcastToGroup(
+        result.group.groupId,
+        serverMsg.groupMemberJoined(result.group.groupId, result.member, result.group.memberCount, result.renamedMembers || []),
+        clientId
+      );
+      sendActiveGroupGameIfAny(result.group.groupId, clientId);
+    }
+  },
+
+  async [CLIENT_TYPES.GROUP_CREATE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!resourceCreateLimiter.check(clientId).allowed) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn tạo phòng quá nhanh, vui lòng chờ 1 phút.'));
+      return;
+    }
+    if (!redisManager.enabled && groupManager.groups.size >= MAX_ACTIVE_GROUPS) {
+      sendTo(clientId, serverMsg.error('GROUP_LIMIT_REACHED', 'Hệ thống đang có quá nhiều phòng nhóm hoạt động. Hãy tham gia một nhóm có sẵn.'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    const textToFilter = `${payload.name || ''} ${payload.topic || ''}`.trim();
+    if (textToFilter) {
+      const check = checkContent(textToFilter);
+      if (check.isViolation) {
+        sendTo(clientId, serverMsg.error('INVALID_PAYLOAD', 'Tên hoặc chủ đề nhóm chứa nội dung không phù hợp.'));
+        return;
+      }
+    }
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi tạo nhóm.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+
+    let result;
+    try {
+      result = await groupManager.createGroup(client, payload);
+    } catch (error) {
+      console.error('[Group] createGroup error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể tạo nhóm lúc này. Vui lòng thử lại sau.'));
+      return;
+    }
+
+    client.state = 'GROUP_CHATTING';
+    client.groupId = result.group.groupId;
+    sendTo(clientId, serverMsg.groupJoined(result.group));
+  },
+
+  async [CLIENT_TYPES.GROUP_JOIN](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi vào nhóm.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+
+    let result;
+    try {
+      result = await groupManager.joinGroupById(client, payload.groupId);
+    } catch (error) {
+      console.error('[Group] joinGroupById error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể vào nhóm lúc này.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GROUP_ERROR', result.error));
+      return;
+    }
+
+    client.state = 'GROUP_CHATTING';
+    client.groupId = result.group.groupId;
+    sendTo(clientId, serverMsg.groupJoined(result.group));
+    broadcastToGroup(
+      result.group.groupId,
+      serverMsg.groupMemberJoined(result.group.groupId, result.member, result.group.memberCount, result.renamedMembers || []),
+      clientId
+    );
+    sendActiveGroupGameIfAny(result.group.groupId, clientId);
+  },
+
+  async [CLIENT_TYPES.GROUP_REJOIN](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi vào lại nhóm.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+
+    let result;
+    try {
+      result = await groupManager.rejoinKeptGroup(client, payload.groupId, payload.rejoinToken);
+    } catch (error) {
+      console.error('[Group] rejoinKeptGroup error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể vào lại nhóm lúc này.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GROUP_NOT_FOUND', result.error));
+      return;
+    }
+
+    client.state = 'GROUP_CHATTING';
+    client.groupId = result.group.groupId;
+    sendTo(clientId, serverMsg.groupJoined(result.group));
+    broadcastToGroup(
+      result.group.groupId,
+      serverMsg.groupMemberJoined(result.group.groupId, result.member, result.group.memberCount, result.renamedMembers || []),
+      clientId
+    );
+    sendActiveGroupGameIfAny(result.group.groupId, clientId);
+  },
+
+  async [CLIENT_TYPES.GROUP_LEAVE](clientId) {
+    await leaveGroupSession(clientId);
+  },
+
+  async [CLIENT_TYPES.GROUP_VOTE_KEEP](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GROUP_CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng nhóm.'));
+      return;
+    }
+
+    let result;
+    try {
+      result = await groupManager.setKeepVote(clientId, payload.keep);
+    } catch (error) {
+      console.error('[Group] setKeepVote error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể cập nhật lựa chọn giữ nhóm lúc này.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GROUP_ERROR', result.error));
+      return;
+    }
+
+    for (const pass of result.activeVoterPasses) {
+      sendTo(pass.clientId, serverMsg.groupKeepPass(pass));
+    }
+
+    broadcastToGroup(result.groupId, serverMsg.groupKeepUpdated({
+      groupId: result.groupId,
+      voterClientId: result.voterClientId,
+      voterNickname: result.voterNickname,
+      wantsKeep: result.wantsKeep,
+      keepCount: result.keepCount,
+      minKeepVotes: result.minKeepVotes,
+      isKept: result.isKept,
+      justActivated: result.justActivated,
+      justDeactivated: result.justDeactivated,
+    }));
+  },
+
+  async [CLIENT_TYPES.GROUP_UNKEEP](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    let result;
+    try {
+      result = await groupManager.unkeepSavedGroup(payload.groupId, payload.rejoinToken);
+    } catch (error) {
+      console.error('[Group] unkeepSavedGroup error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể bỏ giữ nhóm lúc này.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GROUP_ERROR', result.error));
+      return;
+    }
+
+    if (!result.destroyed && result.memberCount > 0) {
+      broadcastToGroup(result.groupId, serverMsg.groupKeepUpdated({
+        groupId: result.groupId,
+        voterClientId: null,
+        voterNickname: client.nickname || 'Một thành viên',
+        wantsKeep: false,
+        keepCount: result.keepCount,
+        minKeepVotes: result.minKeepVotes,
+        isKept: result.isKept,
+        justActivated: false,
+        justDeactivated: !result.isKept,
+      }));
+    }
+
+    sendTo(clientId, serverMsg.groupUnkept(result));
+  },
+
+  async [CLIENT_TYPES.GROUP_LIST](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    try {
+      const groups = await groupManager.listPublicGroups(payload);
+      sendTo(clientId, serverMsg.groupList(groups, groupManager.maxMembers));
+    } catch (error) {
+      console.error('[Group] listPublicGroups error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể tải danh sách nhóm lúc này.'));
+    }
+  },
+
+  async [CLIENT_TYPES.GROUP_SYNC_SAVED](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    try {
+      const { groups, expiredGroupIds } = await groupManager.syncSavedGroups(payload.passes);
+      sendTo(clientId, serverMsg.groupSavedList(groups, expiredGroupIds));
+    } catch (error) {
+      console.error('[Group] syncSavedGroups error:', error.message);
+      sendTo(clientId, serverMsg.error('GROUP_UNAVAILABLE', 'Không thể đồng bộ danh sách nhóm đã giữ.'));
+    }
+  },
+
+  async [CLIENT_TYPES.GROUP_REPORT](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GROUP_CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng nhóm để báo cáo.'));
+      return;
+    }
+    const groupId = groupManager.getGroupId(clientId);
+    if (!groupId || payload.targetClientId === clientId) return;
+
+    const targetMember = await groupManager.getGroupMember(groupId, payload.targetClientId);
+    if (!targetMember) {
+      sendTo(clientId, serverMsg.error('MEMBER_NOT_FOUND', 'Thành viên này không còn trong nhóm.'));
+      return;
+    }
+
+    moderation.addReport(
+      client,
+      { clientId: targetMember.clientId, deviceId: targetMember.memberKey },
+      `[Group ${groupId}] ${payload.reason}`
+    );
+    if (redisManager.isConnected) {
+      redisManager.addBlock(client.deviceId || clientId, targetMember.memberKey || targetMember.clientId, 300);
+    }
+
+    sendTo(clientId, serverMsg.reported());
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PHÒNG GAME NHIỀU NGƯỜI ẨN DANH (2 – 10 NGƯỜI / PHÒNG)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async [CLIENT_TYPES.GAME_ROOM_FIND](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi vào phòng game.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+
+    let excludeRoomId = payload.excludeRoomId || null;
+    if (client.state === 'GAME_ROOM') {
+      excludeRoomId = gameRoomManager.getRoomId(clientId) || excludeRoomId;
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+
+    const result = gameRoomManager.findOrCreateRoom(client, {
+      gameType: payload.gameType,
+      excludeRoomId,
+    });
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GAME_ROOM_ERROR', result.error));
+      return;
+    }
+
+    client.state = 'GAME_ROOM';
+    client.gameRoomId = result.room.roomId;
+
+    sendTo(clientId, serverMsg.gameRoomJoined(result.room));
+    if (!result.created) {
+      broadcastToGameRoom(
+        result.room.roomId,
+        serverMsg.gameRoomPlayerJoined(
+          result.room.roomId,
+          result.player,
+          result.room.playerCount,
+          result.renamedMembers || []
+        ),
+        clientId
+      );
+    }
+  },
+
+  async [CLIENT_TYPES.GAME_ROOM_CREATE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!resourceCreateLimiter.check(clientId).allowed) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn tạo phòng quá nhanh, vui lòng chờ 1 phút.'));
+      return;
+    }
+    if (gameRoomManager.rooms.size >= MAX_ACTIVE_GAME_ROOMS) {
+      sendTo(clientId, serverMsg.error('GAME_ROOM_LIMIT_REACHED', 'Hệ thống đang có quá nhiều phòng game. Hãy tham gia phòng sẵn có.'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (payload.name && checkContent(payload.name).isViolation) {
+      sendTo(clientId, serverMsg.error('INVALID_PAYLOAD', 'Tên phòng game chứa nội dung không phù hợp.'));
+      return;
+    }
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi tạo phòng game.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+
+    const result = gameRoomManager.createRoom(client, payload);
+    client.state = 'GAME_ROOM';
+    client.gameRoomId = result.room.roomId;
+    sendTo(clientId, serverMsg.gameRoomJoined(result.room));
+  },
+
+  async [CLIENT_TYPES.GAME_ROOM_JOIN](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời phòng chat 1-1 trước khi vào phòng game.'));
+      return;
+    }
+    if (client.state === 'WAITING') {
+      if (client.soloHintTimer) {
+        clearTimeout(client.soloHintTimer);
+        client.soloHintTimer = null;
+      }
+      matchmaker.dequeue(clientId);
+      client.state = 'CONNECTED';
+    }
+    if (client.state === 'GROUP_CHATTING') {
+      await leaveGroupSession(clientId, { silent: true });
+      if (clients.get(clientId) !== client) return;
+    }
+    if (client.state === 'GAME_ROOM') {
+      leaveGameRoomSession(clientId, { silent: true });
+    }
+
+    const result = gameRoomManager.joinRoom(client, payload);
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error(result.code || 'GAME_ROOM_ERROR', result.error));
+      return;
+    }
+
+    client.state = 'GAME_ROOM';
+    client.gameRoomId = result.room.roomId;
+    sendTo(clientId, serverMsg.gameRoomJoined(result.room));
+    broadcastToGameRoom(
+      result.room.roomId,
+      serverMsg.gameRoomPlayerJoined(
+        result.room.roomId,
+        result.player,
+        result.room.playerCount,
+        result.renamedMembers || []
+      ),
+      clientId
+    );
+  },
+
+  [CLIENT_TYPES.GAME_ROOM_LEAVE](clientId) {
+    leaveGameRoomSession(clientId);
+  },
+
+  [CLIENT_TYPES.GAME_ROOM_LIST](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    const rooms = gameRoomManager.listRooms(payload);
+    sendTo(clientId, serverMsg.gameRoomList(rooms, gameRoomManager.maxPlayers, Object.values(GAME_CATALOG)));
+  },
+
+  [CLIENT_TYPES.GAME_ROOM_SELECT_GAME](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GAME_ROOM') return;
+    const res = gameRoomManager.selectGame(clientId, payload.gameType);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('GAME_ROOM_ERROR', res.error));
+    }
+  },
+
+  async [CLIENT_TYPES.GAME_ROOM_START](clientId) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GAME_ROOM') return;
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM') return;
+
+    const res = gameRoomManager.startGame(clientId);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('GAME_ROOM_ERROR', res.error));
+    }
+  },
+
+  async [CLIENT_TYPES.GAME_ROOM_ACTION](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GAME_ROOM') return;
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client || client.state !== 'GAME_ROOM') return;
+
+    const res = gameRoomManager.handleAction(clientId, payload);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('GAME_ROOM_ACTION_ERROR', res.error));
+    }
+  },
+
+  [CLIENT_TYPES.GAME_ROOM_REPORT](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GAME_ROOM') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong phòng game để báo cáo.'));
+      return;
+    }
+    const roomId = gameRoomManager.getRoomId(clientId);
+    if (!roomId || payload.targetClientId === clientId) return;
+
+    const target = gameRoomManager.getPlayer(roomId, payload.targetClientId);
+    if (!target) {
+      sendTo(clientId, serverMsg.error('MEMBER_NOT_FOUND', 'Người chơi này không còn trong phòng game.'));
+      return;
+    }
+
+    moderation.addReport(
+      client,
+      { clientId: target.clientId, deviceId: target.memberKey },
+      `[GameRoom ${roomId}] ${payload.reason}`
+    );
+    if (redisManager.isConnected) {
+      redisManager.addBlock(client.deviceId || clientId, target.memberKey || target.clientId, 300);
+    }
+    sendTo(clientId, serverMsg.reported());
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // MINIGAME NHÚNG NGAY TRONG CHAT 1-1 / LUMI AI / NHÓM CHAT (CHƠI Ở NGOÀI)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async [CLIENT_TYPES.CHAT_GAME_OPEN](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state === 'CHATTING') {
+      if (payload.gameType === 'undercover') {
+        sendTo(clientId, serverMsg.error('GAME_MIN_PLAYERS', 'Trò chơi "Ai Là Gián Điệp?" cần ít nhất 3 người — hãy chơi trong Nhóm chat hoặc Phòng Game nhé!'));
+        return;
+      }
+      const mapped = payload.gameType === 'caro_arena' ? 'caro' : payload.gameType;
+      return messageHandlers[CLIENT_TYPES.GAME_INVITE](clientId, { gameType: mapped, size: 10 });
+    }
+
+    if (client.state !== 'GROUP_CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Hãy vào một cuộc trò chuyện 1-1 hoặc Nhóm chat để mở minigame.'));
+      return;
+    }
+
+    const groupId = groupManager.getGroupId(clientId);
+    if (!groupId) return;
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+    const contextKey = `group:${groupId}`;
+    const existing = embeddedGameManager.getRoomByContext(contextKey);
+    if (existing) {
+      sendActiveGroupGameIfAny(groupId, clientId);
+      return;
+    }
+
+    const groupMember = await groupManager.getGroupMember(groupId, clientId);
+    if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING') return;
+
+    const displayNick = (groupMember && groupMember.nickname) || client.nickname;
+    const info = GAME_CATALOG[payload.gameType] || GAME_CATALOG.quiz_race;
+
+    embeddedGameManager.createEmbeddedSession(
+      contextKey,
+      {
+        clientId,
+        deviceId: client.deviceId,
+        nickname: displayNick,
+        avatar: client.avatar || '🦊',
+      },
+      {
+        gameType: payload.gameType,
+        maxPlayers: MAX_GAME_ROOM_PLAYERS,
+        name: `${info.icon} ${info.name} (Nhóm)`,
+        contextType: 'group',
+        isBotSession: false,
+        allowAnyPlayerControl: false,
+        autoStart: false,
+        openNotice: `🎮 ${displayNick} vừa mở bàn ${info.icon} ${info.name} ngay trong nhóm! Bấm "🙋 Tham gia bàn" để vào chơi cùng (tối đa ${MAX_GAME_ROOM_PLAYERS} người).`,
+      }
+    );
+  },
+
+  async [CLIENT_TYPES.CHAT_GAME_JOIN](clientId) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'GROUP_CHATTING') return;
+    const groupId = groupManager.getGroupId(clientId);
+    if (!groupId) return;
+    if (!(await ensureNotGroupBanned(clientId))) return;
+    if (clients.get(clientId) !== client || client.state !== 'GROUP_CHATTING' || groupManager.getGroupId(clientId) !== groupId) return;
+
+    const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
+    if (!room) {
+      sendTo(clientId, serverMsg.error('GAME_ROOM_NOT_FOUND', 'Hiện chưa có bàn game nào đang mở trong nhóm.'));
+      return;
+    }
+
+    const groupMember = await groupManager.getGroupMember(groupId, clientId);
+    const displayNick = (groupMember && groupMember.nickname) || client.nickname;
+
+    const joinRes = embeddedGameManager.joinRoom(
+      {
+        clientId,
+        deviceId: client.deviceId,
+        nickname: displayNick,
+        avatar: client.avatar || '🦊',
+      },
+      { roomId: room.roomId }
+    );
+    if (!joinRes.ok) {
+      sendTo(clientId, serverMsg.error(joinRes.code || 'GAME_ROOM_ERROR', joinRes.error));
+      return;
+    }
+
+    embeddedGameManager.broadcastRoomState(room.roomId, {
+      systemNotice: `🙋 ${joinRes.player.nickname} đã tham gia bàn game (${joinRes.room.playerCount}/${joinRes.room.maxPlayers})!`,
+    });
+  },
+
+  [CLIENT_TYPES.CHAT_GAME_LEAVE](clientId) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (groupId) removePlayerFromGroupEmbeddedGame(groupId, clientId);
+    } else if (client.state === 'CHATTING') {
+      closeEmbedded1v1Game(roomManager.getRoomId(clientId), { closedByName: client.nickname });
+    }
+  },
+
+  async [CLIENT_TYPES.CHAT_GAME_SELECT](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state === 'CHATTING') {
+      if (!(await canPerformGameAction(clientId))) return;
+      if (payload.gameType === 'undercover') {
+        sendTo(clientId, serverMsg.error('GAME_MIN_PLAYERS', 'Trò chơi "Ai Là Gián Điệp?" cần ít nhất 3 người chơi!'));
+        return;
+      }
+      if (payload.gameType === 'caro_arena') {
+        const chatRoomId = roomManager.getRoomId(clientId);
+        closeEmbedded1v1Game(chatRoomId, { silent: true });
+        return messageHandlers[CLIENT_TYPES.GAME_INVITE](clientId, { gameType: 'caro', size: 10 });
+      }
+    } else if (client.state === 'GROUP_CHATTING') {
+      if (!(await ensureNotGroupBanned(clientId))) return;
+    } else {
+      return;
+    }
+
+    const res = embeddedGameManager.selectGame(clientId, payload.gameType);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ERROR', res.error));
+    }
+  },
+
+  async [CLIENT_TYPES.CHAT_GAME_START](clientId) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state === 'CHATTING') {
+      if (!(await canPerformGameAction(clientId))) return;
+    } else if (client.state === 'GROUP_CHATTING') {
+      if (!(await ensureNotGroupBanned(clientId))) return;
+    } else {
+      return;
+    }
+
+    const res = embeddedGameManager.startGame(clientId);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ERROR', res.error));
+    }
+  },
+
+  async [CLIENT_TYPES.CHAT_GAME_ACTION](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state === 'CHATTING') {
+      if (!(await canPerformGameAction(clientId))) return;
+    } else if (client.state === 'GROUP_CHATTING') {
+      if (!(await ensureNotGroupBanned(clientId))) return;
+    } else {
+      return;
+    }
+
+    const res = embeddedGameManager.handleAction(clientId, payload);
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.error('CHAT_GAME_ACTION_ERROR', res.error));
+    }
+  },
+
+  [CLIENT_TYPES.CHAT_GAME_CLOSE](clientId) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    if (client.state === 'CHATTING') {
+      closeEmbedded1v1Game(roomManager.getRoomId(clientId), { closedByName: client.nickname });
+      return;
+    }
+
+    if (client.state === 'GROUP_CHATTING') {
+      const groupId = groupManager.getGroupId(clientId);
+      if (!groupId) return;
+      const room = embeddedGameManager.getRoomByContext(`group:${groupId}`);
+      if (!room) return;
+      if (room.hostId === clientId) {
+        const hostNick = room.players.get(clientId)?.nickname || client.nickname;
+        embeddedGameManager.destroyRoomByContext(`group:${groupId}`);
+        broadcastToGroup(groupId, serverMsg.chatGameState({
+          contextType: 'group',
+          groupId,
+          closed: true,
+          closedByName: hostNick,
+          systemNotice: `🎮 ${hostNick} đã đóng bàn game trong nhóm.`,
+        }));
+      } else if (room.players.has(clientId)) {
+        removePlayerFromGroupEmbeddedGame(groupId, clientId);
+      }
+    }
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GIỮ KẾT NỐI ẨN DANH 2 CHIỀU & MÃ HẸN GẶP LẠI (CHAT 1-1)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async [CLIENT_TYPES.PAIR_VOTE_KEEP](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client || client.state !== 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Bạn chưa ở trong cuộc trò chuyện 1-1.'));
+      return;
+    }
+    if (roomManager.isBotRoom(clientId)) {
+      sendTo(clientId, serverMsg.error('PAIR_BOT_UNSUPPORTED', 'Bạn luôn có thể gặp lại Lumi bất cứ lúc nào từ Trang chủ nhé!'));
+      return;
+    }
+
+    const roomId = roomManager.getRoomId(clientId);
+    const partnerId = roomManager.getPartnerId(clientId);
+    const partnerClient = partnerId ? clients.get(partnerId) : null;
+    if (!roomId || !partnerId || !partnerClient) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_IN_ROOM, 'Đối phương hiện không còn trực tuyến trong phòng.'));
+      return;
+    }
+
+    let result;
+    try {
+      result = await connectionManager.setKeepVote(roomId, client, partnerClient, payload.keep);
+    } catch (error) {
+      console.error('[Connection] setKeepVote error:', error.message);
+      sendTo(clientId, serverMsg.error('PAIR_UNAVAILABLE', 'Không thể cập nhật Giữ kết nối lúc này. Vui lòng thử lại.'));
+      return;
+    }
+
+    if (!result.ok) {
+      sendTo(clientId, serverMsg.error('PAIR_ERROR', result.error || 'Không thể cập nhật Giữ kết nối.'));
+      return;
+    }
+
+    // Nếu vừa hủy kết nối đã giữ -> xóa ở cả 2 bên
+    if (result.justCancelled) {
+      sendTo(clientId, serverMsg.pairRemoved(result.cancelledPairId, 'Bạn đã hủy Giữ kết nối này.'));
+      sendTo(partnerId, serverMsg.pairRemoved(result.cancelledPairId, `${client.nickname} đã hủy Giữ kết nối này.`));
+      sendTo(clientId, serverMsg.pairKeepUpdated({
+        myVote: false,
+        partnerVote: false,
+        keepCount: 0,
+        isKept: false,
+        justActivated: false,
+        justCancelled: true,
+        actorNickname: client.nickname,
+        pairId: null,
+        pairCode: null,
+      }));
+      sendTo(partnerId, serverMsg.pairKeepUpdated({
+        myVote: false,
+        partnerVote: false,
+        keepCount: 0,
+        isKept: false,
+        justActivated: false,
+        justCancelled: true,
+        actorNickname: client.nickname,
+        pairId: null,
+        pairCode: null,
+      }));
+      return;
+    }
+
+    // Nếu cả 2 vừa đồng ý (2/2) -> cấp thẻ kết nối + mã hẹn gặp lại cho từng bên!
+    if (result.justActivated && Array.isArray(result.passes)) {
+      for (const item of result.passes) {
+        sendTo(item.clientId, serverMsg.pairKeepPass(item.pass));
+      }
+    }
+
+    const pairId = result.pair ? result.pair.pairId : null;
+    const pairCode = result.pair ? result.pair.pairCode : null;
+    const historyCount = result.pair && Array.isArray(result.pair.history) ? result.pair.history.length : 0;
+
+    // Gửi trạng thái cá nhân hóa cho người bấm
+    sendTo(clientId, serverMsg.pairKeepUpdated({
+      myVote: result.voterVote,
+      partnerVote: result.partnerVote,
+      keepCount: result.keepCount,
+      isKept: result.isKept,
+      justActivated: result.justActivated,
+      justCancelled: false,
+      actorIsMe: true,
+      actorNickname: client.nickname,
+      partnerNickname: partnerClient.nickname,
+      pairId,
+      pairCode,
+      historyCount,
+    }));
+
+    // Gửi trạng thái cá nhân hóa cho đối phương
+    sendTo(partnerId, serverMsg.pairKeepUpdated({
+      myVote: result.partnerVote,
+      partnerVote: result.voterVote,
+      keepCount: result.keepCount,
+      isKept: result.isKept,
+      justActivated: result.justActivated,
+      justCancelled: false,
+      actorIsMe: false,
+      actorNickname: client.nickname,
+      partnerNickname: client.nickname,
+      pairId,
+      pairCode,
+      historyCount,
+    }));
+  },
+
+  async [CLIENT_TYPES.PAIR_SYNC](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    try {
+      const { connections, expiredPairIds } = await connectionManager.syncSavedPairs(
+        payload.passes,
+        (pair, otherSlot) => getPartnerPresenceForPair(pair, otherSlot, clientId)
+      );
+
+      client.syncedPairLinks = connections.map((c) => ({ pairId: c.pairId, mySlot: c.mySlot }));
+      sendTo(clientId, serverMsg.pairList(connections, expiredPairIds));
+
+      // Thông báo online tới những người hợp cạ đang trực tuyến
+      notifyPairPartnersPresence(client, true).catch(() => {});
+    } catch (error) {
+      console.error('[Connection] syncSavedPairs error:', error.message);
+      sendTo(clientId, serverMsg.error('PAIR_UNAVAILABLE', 'Không thể đồng bộ danh sách Giữ kết nối lúc này.'));
+    }
+  },
+
+  async [CLIENT_TYPES.PAIR_RECONNECT](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotRedisBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    let verified;
+    try {
+      verified = await connectionManager.verifyPass(payload.pairId, payload.pairToken);
+    } catch (error) {
+      console.error('[Connection] verifyPass error:', error.message);
+      sendTo(clientId, serverMsg.error('PAIR_UNAVAILABLE', 'Không thể xác thực kết nối lúc này.'));
+      return;
+    }
+
+    if (!verified) {
+      sendTo(clientId, serverMsg.pairRemoved(payload.pairId, 'Kết nối này đã hết hạn hoặc đã bị hủy.'));
+      return;
+    }
+
+    await initiatePairReconnect(clientId, verified.pair, verified.slot, verified.otherSlot);
+  },
+
+  async [CLIENT_TYPES.PAIR_JOIN_CODE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+    if (!client.nickname) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.NOT_JOINED, 'Vui lòng nhập biệt danh trước'));
+      return;
+    }
+    if (!(await ensureNotRedisBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (!connectionManager.checkCodeAttemptLimit(clientId) || !pairCodeIpLimiter.check(client.clientIp || clientId).allowed) {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn nhập mã hẹn quá nhiều lần, vui lòng chờ một lát.'));
+      return;
+    }
+
+    let resolved;
+    try {
+      resolved = await connectionManager.resolvePairByCode(payload.pairCode, client);
+    } catch (error) {
+      console.error('[Connection] resolvePairByCode error:', error.message);
+      sendTo(clientId, serverMsg.error('PAIR_UNAVAILABLE', 'Không thể kiểm tra mã hẹn lúc này.'));
+      return;
+    }
+
+    if (!resolved.ok) {
+      sendTo(clientId, serverMsg.error(resolved.code || 'PAIR_NOT_FOUND', resolved.error));
+      return;
+    }
+
+    await initiatePairReconnect(clientId, resolved.pair, resolved.slot, resolved.otherSlot, {
+      issuedPass: resolved.pass,
+    });
+  },
+
+  async [CLIENT_TYPES.PAIR_INVITE_RESPOND](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    const invite = connectionManager.consumeInvite(payload.inviteId);
+    if (!invite || invite.toClientId !== clientId) {
+      sendTo(clientId, serverMsg.error('PAIR_INVITE_EXPIRED', 'Lời mời kết nối lại này đã hết hạn.'));
+      return;
+    }
+
+    const fromClient = clients.get(invite.fromClientId);
+    if (!payload.accept) {
+      if (fromClient) {
+        leavePairWaiting(fromClient.clientId);
+        sendTo(fromClient.clientId, serverMsg.pairInviteDeclined({
+          pairId: invite.pairId,
+          partnerNickname: client.nickname || 'Đối phương',
+          message: `${client.nickname || 'Người ấy'} hiện đang bận nên hẹn bạn dịp khác nhé.`,
+        }));
+      }
+      return;
+    }
+
+    if (!(await ensureNotRedisBanned(clientId))) return;
+    if (clients.get(clientId) !== client) return;
+
+    if (!fromClient || fromClient.ws.readyState !== 1) {
+      sendTo(clientId, serverMsg.error('PAIR_INVITE_EXPIRED', 'Đối phương đã rời phòng hẹn trước đó.'));
+      return;
+    }
+
+    const pair = await connectionManager._loadPair(invite.pairId, { includeHistory: true });
+    if (!pair) {
+      sendTo(clientId, serverMsg.pairRemoved(invite.pairId, 'Kết nối này không còn tồn tại.'));
+      return;
+    }
+
+    if (client.state === 'CHATTING') {
+      sendTo(clientId, serverMsg.error(ERROR_CODES.ALREADY_CHATTING, 'Hãy rời cuộc trò chuyện 1-1 hiện tại trước khi chấp nhận lời mời.'));
+      return;
+    }
+
+    // Nếu người chấp nhận vừa mở Trang chủ chưa kịp bấm join -> tự điền biệt danh cũ của slot
+    if (!client.nickname && pair.slots[invite.toSlot]) {
+      client.nickname = pair.slots[invite.toSlot].nickname;
+      client.avatar = pair.slots[invite.toSlot].avatar || '🦊';
+      client.mood = pair.slots[invite.toSlot].mood || 'ngau_nhien';
+    }
+
+    const clientA = invite.fromSlot === 'A' ? fromClient : client;
+    const clientB = invite.fromSlot === 'A' ? client : fromClient;
+    await startKeptPairChat(pair, clientA, clientB);
+  },
+
+  [CLIENT_TYPES.PAIR_CANCEL_WAIT](clientId) {
+    leavePairWaiting(clientId);
+  },
+
+  async [CLIENT_TYPES.PAIR_REMOVE](clientId, payload) {
+    const client = clients.get(clientId);
+    if (!client) return;
+
+    let res;
+    try {
+      res = await connectionManager.removePairByPass(payload.pairId, payload.pairToken);
+    } catch (error) {
+      console.error('[Connection] removePairByPass error:', error.message);
+      sendTo(clientId, serverMsg.error('PAIR_UNAVAILABLE', 'Không thể hủy kết nối lúc này.'));
+      return;
+    }
+
+    if (!res.ok) {
+      sendTo(clientId, serverMsg.pairRemoved(payload.pairId, 'Kết nối đã được gỡ khỏi danh sách.'));
+      return;
+    }
+
+    sendTo(clientId, serverMsg.pairRemoved(res.pairId, 'Đã hủy Giữ kết nối vĩnh viễn ở cả hai phía.'));
+
+    // Thông báo cho đối phương nếu đang trực tuyến
+    for (const slotKey of ['A', 'B']) {
+      const target = findOnlineClientForPairSlot({ pairId: res.pairId, slots: res.slots }, slotKey, clientId);
+      if (target) {
+        sendTo(target.clientId, serverMsg.pairRemoved(res.pairId, 'Một kết nối đã được hủy ở cả hai phía.'));
+      }
+    }
+  },
 };
 
 // ─── Xử lý kết nối WebSocket ──────────────────────────────────────────────
 
 wss.on('connection', (ws, req) => {
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+  const clientIp = getClientIp(req, { trustProxy: TRUST_PROXY, trustProxyHops: TRUST_PROXY_HOPS });
 
   // 1. Giới hạn tổng số kết nối máy chủ
   if (clients.size >= MAX_TOTAL_CONNECTIONS) {
@@ -2417,9 +5205,14 @@ wss.on('connection', (ws, req) => {
     clientIp,
     deviceId: null,
     nickname: null,
+    avatar: '🦊',
     interests: [],
     mood: 'ngau_nhien',
     state: 'CONNECTED',
+    groupId: null,
+    gameRoomId: null,
+    lastGroupTypingAt: 0,
+    pendingChatCount: 0,
     isAlive: true,
     connectedAt: Date.now(),
   };
@@ -2461,6 +5254,20 @@ wss.on('connection', (ws, req) => {
       clients.get(clientId) !== clientInfo ||
       clientInfo.ws !== ws
     ) {
+      return;
+    }
+
+    // 0. Phòng thủ Flood / DoS cấp WebSocket Frame toàn cục
+    const frameRate = wsFrameLimiter.check(clientId);
+    if (!frameRate.allowed) {
+      if (frameRate.count > 150) {
+        console.warn(`[Security] 🚫 Ngắt kết nối flood WS từ ${clientId} (${clientInfo.clientIp}, frames=${frameRate.count}/5s)`);
+        ws.close(1008, 'Gửi quá nhiều yêu cầu liên tục');
+        return;
+      }
+      if (frameRate.count === 61 || frameRate.count % 20 === 0) {
+        sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Bạn đang gửi yêu cầu quá nhanh, vui lòng chậm lại.'));
+      }
       return;
     }
 
@@ -2538,12 +5345,20 @@ wss.on('connection', (ws, req) => {
       }
 
       if (type === CLIENT_TYPES.MESSAGE) {
+        if ((clientInfo.pendingChatCount || 0) >= MAX_PENDING_CHAT_PER_CLIENT) {
+          sendTo(clientId, serverMsg.error(ERROR_CODES.RATE_LIMITED, 'Hàng đợi tin nhắn đang đầy, vui lòng gửi chậm lại.'));
+          return;
+        }
+        clientInfo.pendingChatCount = (clientInfo.pendingChatCount || 0) + 1;
         const previous = pendingChatMessages.get(clientId) || Promise.resolve();
         const pending = previous
           .then(() => handler(clientId, validateResult.sanitized))
           .catch((error) => {
             console.error(`[Server] Async message handler failed for ${type} from ${clientId}:`, error);
             sendTo(clientId, serverMsg.error('MESSAGE_PROCESSING_FAILED', 'Không thể xử lý tin nhắn lúc này. Vui lòng thử lại.'));
+          })
+          .finally(() => {
+            clientInfo.pendingChatCount = Math.max(0, (clientInfo.pendingChatCount || 1) - 1);
           });
         pendingChatMessages.set(clientId, pending);
         pending.then(() => {
@@ -2672,6 +5487,8 @@ function holdRoomForReconnect(clientId) {
 
     // Phòng thực sự hết thời gian khôi phục
     cleanupCaroGame(roomId);
+    closeEmbedded1v1Game(roomId, { silent: true });
+    connectionManager.cleanupRoomSession(roomId);
 
     const result = roomManager.removeClient(clientId);
 
@@ -2745,6 +5562,22 @@ function handleDisconnect(clientId, disconnectedWs = null) {
   // Nếu đang ở trong hàng đợi → xóa
   matchmaker.dequeue(clientId);
 
+  // Nếu đang ở trong phòng trò chuyện nhóm → rời nhóm (và tự xóa nhóm nếu trống & < 3 người giữ)
+  if (groupManager.isInGroup(clientId)) {
+    leaveGroupSession(clientId, { silent: true, reason: 'ngắt kết nối' }).catch((error) => {
+      console.error(`[Group] Disconnect cleanup failed for ${clientId}:`, error.message);
+    });
+  }
+
+  // Nếu đang ở trong phòng game nhiều người → rời phòng (tự chuyển Host / tự hủy nếu trống)
+  if (gameRoomManager.isInGameRoom(clientId)) {
+    leaveGameRoomSession(clientId, { silent: true, reason: 'ngắt kết nối' });
+  }
+
+  // Nếu đang đợi trong phòng hẹn Giữ kết nối → dọn sạch & báo offline cho đối phương
+  leavePairWaiting(clientId);
+  notifyPairPartnersPresence(client, false).catch(() => {});
+  connectionManager.clearClient(clientId);
 
   // Nếu đang chat với người thật thì giữ phòng 30 giây
   const roomId = roomManager.getRoomId(clientId);
@@ -2765,6 +5598,8 @@ function handleDisconnect(clientId, disconnectedWs = null) {
     // Phòng Lumi hoặc trường hợp khác: dọn như cũ
     // Hủy token của người đã hết thời hạn
     resumeSessionManager.revokeSession(clientId);
+    closeEmbedded1v1Game(roomId, { silent: true });
+    connectionManager.cleanupRoomSession(roomId);
 
     const result = roomManager.removeClient(clientId);
 
@@ -2780,8 +5615,10 @@ function handleDisconnect(clientId, disconnectedWs = null) {
   }
 
 
-  // Dọn dẹp moderation
+  // Dọn dẹp moderation & rate limiter theo phiên
   moderation.clearClient(clientId);
+  wsFrameLimiter.delete(clientId);
+  resourceCreateLimiter.delete(clientId);
 
   if (redisManager.enabled) {
     redisManager.removeOnlineClient(clientId).catch((error) => {
@@ -2836,13 +5673,38 @@ const matchRecoveryTimer = setInterval(() => {
     });
 }, 1_000);
 
+const groupPruneTimer = setInterval(() => {
+  groupManager.pruneStaleGroups().catch((error) => {
+    console.error('[Group] Prune failed:', error.message);
+  });
+  moderation.pruneExpired();
+  pruneVoiceStorage(0);
+  if (typeof attachmentStorage.prune === 'function') attachmentStorage.prune(0);
+  wsFrameLimiter.prune();
+  resourceCreateLimiter.prune();
+  voiceUploadLimiter.prune();
+  pairCodeIpLimiter.prune();
+}, 60_000);
+
 // ─── Graceful shutdown ─────────────────────────────────────────────────────
 
 async function shutdown() {
   console.log('\n[Server] Shutting down...');
   clearInterval(heartbeatTimer);
   clearInterval(matchRecoveryTimer);
+  clearInterval(groupPruneTimer);
   matchmaker.destroy();
+
+  // Rời tất cả phòng nhóm cục bộ trước khi tắt server để cập nhật trạng thái nhóm sạch sẽ
+  const activeGroupClientIds = [...groupManager.clientGroupMap.keys()];
+  await Promise.allSettled(
+    activeGroupClientIds.map((cid) => leaveGroupSession(cid, { silent: true, reason: 'máy chủ bảo trì' }))
+  );
+
+  gameRoomManager.destroy();
+  embeddedGameManager.destroy();
+  connectionManager.destroy();
+
   await redisManager.destroy();
 
   // Đóng tất cả kết nối
@@ -2869,6 +5731,8 @@ httpServer.listen(PORT, () => {
   console.log(`  📡 HTTP:      http://localhost:${PORT}`);
   console.log(`  🔌 WebSocket: ws://localhost:${PORT}`);
   console.log(`  💓 Heartbeat: mỗi ${HEARTBEAT_INTERVAL / 1000}s`);
+  console.log(`  👥 GroupChat: tối đa ${groupManager.maxMembers} thành viên/nhóm (giữ nhóm >= ${groupManager.minKeepVotes} phiếu)`);
+  console.log(`  🎮 GameRooms: 5 trò chơi nhiều người (2–${gameRoomManager.maxPlayers} người/phòng)`);
   console.log(`  🤖 Lumi AI:   ${process.env.GROQ_API_KEY ? 'Groq API (bật)' : 'kịch bản offline (chưa có GROQ_API_KEY)'}`);
   console.log('═══════════════════════════════════════════════════');
 });

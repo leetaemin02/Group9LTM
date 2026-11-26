@@ -35,6 +35,7 @@ class RedisManager {
     onMatchEvent,
     onRoomLeft,
     onOnlineCount,
+    onGroupEvent,
   } = {}) {
     this.instanceId = randomUUID();
     this.redisUrl = redisUrl;
@@ -50,6 +51,7 @@ class RedisManager {
     this.onMatchEvent = onMatchEvent || (() => {});
     this.onRoomLeft = onRoomLeft || (() => {});
     this.onOnlineCount = onOnlineCount || (() => {});
+    this.onGroupEvent = onGroupEvent || (() => {});
 
     this.pubClient = null;
     this.subClient = null;
@@ -296,6 +298,14 @@ class RedisManager {
       partnerId,
       reason
     );
+  }
+
+  /**
+   * Phát sự kiện phòng nhóm tới tất cả server instance (O(1) publish mỗi tin nhắn/sự kiện).
+   * @param {object} event
+   */
+  async publishGroupEvent(event) {
+    return pubsub.publishGroupEvent(this, event);
   }
 
   /**

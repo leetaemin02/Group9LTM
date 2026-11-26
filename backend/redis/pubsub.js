@@ -64,6 +64,29 @@ async function publishRoomLeft(manager, clientId, partnerId, reason = null) {
 }
 
 
+// Phát sự kiện nhóm (O(1) publish mỗi sự kiện, mỗi node tự fan-out tới socket cục bộ của nhóm đó)
+async function publishGroupEvent(manager, event) {
+  if (!manager.isConnected || !manager.pubClient) {
+    return false;
+  }
+
+  try {
+    await manager.pubClient.publish(
+      'chat:group:event',
+      JSON.stringify({
+        ...event,
+        sourceInstanceId: manager.instanceId
+      })
+    );
+
+    return true;
+  } catch (error) {
+    console.error('[Redis PubSub] publishGroupEvent:', error.message);
+    return false;
+  }
+}
+
+
 function setupSubscriptions(manager) {
   if (!manager.subClient) return;
 
@@ -73,6 +96,7 @@ function setupSubscriptions(manager) {
   subClient.psubscribe(
     'chat:client:*',
     'chat:{match}:room:*',
+    'chat:group:*',
     'chat:system:*',
     (error) => {
       if (error) {
@@ -118,6 +142,10 @@ function setupSubscriptions(manager) {
         const data = JSON.parse(message);
         manager.onRoomLeft(data);
 
+      } else if (channel === 'chat:group:event') {
+        const data = JSON.parse(message);
+        manager.onGroupEvent(data);
+
       } else if (channel === 'chat:system:online') {
         const data = JSON.parse(message);
         manager.onOnlineCount(data.count);
@@ -137,5 +165,6 @@ module.exports = {
   publishToClient,
   publishMatchEvent,
   publishRoomLeft,
+  publishGroupEvent,
   setupSubscriptions
 };
