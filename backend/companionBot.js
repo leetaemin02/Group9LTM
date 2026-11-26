@@ -37,8 +37,8 @@ const WELCOME_MESSAGES_BY_MOOD = {
     'Hế lô bạn! Năng lượng tích cực ngập tràn luôn ☀️ Nay có chuyện gì vui thế bạn ơi, chia sẻ miếng nào!',
   ],
   tim_ban_game: [
-    'Chào chiến thần game thủ! Làm tí cờ Caro 1-1 khởi động tay chân không? Bấm nút "🎮 Caro 1-1" ở trên nhé 🎮🔥',
-    'Hello bạn! Bàn cờ Caro sẵn sàng rồi nè, bấm "🎮 Caro 1-1" so tài với Lumi xem ai pro hơn nhé!',
+    'Chào chiến thần game thủ! Làm tí Đố Vui, Nối Từ, Đấu Trí hay Caro không? Bấm nút "🎮 Chơi Game" ở trên nhé 🎮🔥',
+    'Hello bạn! Kho game sẵn sàng rồi nè, bấm "🎮 Chơi Game" so tài với Lumi xem ai pro hơn nhé!',
   ],
   hoc_tap: [
     'Chào đồng chí! Đang chạy deadline hay ôn thi mà căng thẳng thế? Cứ nghỉ tay một xíu nói chuyện với mình nhé 📚☕',
@@ -88,10 +88,10 @@ const CONVERSATION_PATTERNS = [
   },
   // 5. Muốn chơi game, rủ chơi cờ
   {
-    regex: /(chơi game|chơi cờ|caro|minigame|thách đấu|so tài)/i,
+    regex: /(chơi game|chơi cờ|caro|minigame|thách đấu|so tài|đố vui|nối từ|đấu trí)/i,
     replies: [
-      'Kèo này căng đấy! Bấm nút "🎮 Caro 1-1" ở thanh menu trên cùng đi bạn, Lumi nhận kèo ngay và luôn! 🎮🔥',
-      'Haha chiến luôn! Bấm "🎮 Caro 1-1" mở bàn cờ thử tài nhau liền đi nè, xem ai thắng nha!',
+      'Kèo này căng đấy! Bấm nút "🎮 Chơi Game" ở thanh menu trên cùng đi bạn, Lumi nhận kèo ngay và luôn! 🎮🔥',
+      'Haha chiến luôn! Bấm "🎮 Chơi Game" chọn trò rồi thử tài nhau liền đi nè, xem ai thắng nha!',
     ],
   },
   // 6. Khen ngợi, cảm ơn
@@ -118,7 +118,7 @@ const DEFAULT_EMPATHETIC_REPLIES = [
   'Mình vẫn đang chăm chú nghe bạn nói đây nè. Thấy nhẹ lòng hơn tí nào chưa?',
   'Chuẩn luôn á! Nhiều khi nói ra được với một người lắng nghe thấy thoải mái hẳn bạn nhỉ?',
   'Cảm ơn bạn đã tin tưởng chia sẻ với Lumi nha. Còn điều gì muốn trút bỏ nữa không nào?',
-  'Nếu thấy hơi mỏi mắt hoặc căng thẳng, bạn thử bấm nút "🎮 Caro 1-1" ở trên làm một ván cờ giải trí cùng Lumi xem sao nhé!',
+  'Nếu thấy hơi mỏi mắt hoặc căng thẳng, bạn thử bấm nút "🎮 Chơi Game" ở trên làm một ván giải trí cùng Lumi xem sao nhé!',
 ];
 
 /** Câu bình luận khi chơi cờ Caro với Bot */
@@ -200,30 +200,32 @@ class CompanionBot {
       return;
     }
 
-    // Khi bật Groq: bật typing và sinh câu chào mở màn dí dỏm bằng Groq
+    // Khi bật Groq/xAI: bật typing và sinh câu chào mở màn tự nhiên (không bọc lệnh trong thẻ user)
     this._sendTyping(true);
     const seq = ++this.turnSeq;
     const startedAt = Date.now();
+    if (this.abortController) this.abortController.abort();
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
 
     (async () => {
       let welcomeText = null;
       try {
-        const welcomePrompt = `Hãy gửi 1 câu chào mở màn ngắn gọn (tối đa 25 từ), tự nhiên, hài hước và thân thiện tới bạn chat (tâm trạng hiện tại: ${this.userMood}). Xưng "mình", gọi "bạn". Không thuyết giảng hay dùng văn mẫu trị liệu.`;
-        const res = await groqChat.generateReply({
-          userText: welcomePrompt,
-          history: [],
+        const res = await groqChat.generateWelcome({
           mood: this.userMood,
+          signal,
         });
         if (res && res.text) welcomeText = res.text;
       } catch (_) {}
 
       if (this.destroyed || seq !== this.turnSeq) return;
+      this.abortController = null;
 
       const finalWelcome = welcomeText || fallbackText;
       const targetDuration = Math.min(1800, Math.max(600, finalWelcome.length * 15));
       const remaining = Math.max(0, targetDuration - (Date.now() - startedAt));
 
-      setTimeout(() => {
+      this.replyTimeout = setTimeout(() => {
         if (this.destroyed || seq !== this.turnSeq) return;
         this._sendTyping(false);
         this._sendMessage(finalWelcome);

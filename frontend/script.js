@@ -319,6 +319,7 @@ const WAITING_TIPS = [
 
 let ws = null;
 let clientId = null;
+let pendingTempClientId = null;
 const RESUME_TOKEN_KEY = 'chatmatch_resume_token';
 let resumePending = false;
 let nickname = '';
@@ -389,6 +390,10 @@ let gameBrowseFilter = 'all';
 let myPrivateGameSecret = null;
 let secretWordHidden = false;
 let myQuizSelection = null;
+let myQuizQuestionToken = null;
+let myMindDuelChoice = null; // { card, stake }
+let myMindDuelStake = 20;
+let myMindDuelRoundToken = null;
 let myUndercoverVote = null;
 let multiGameCountdownTimer = null;
 
@@ -915,12 +920,11 @@ function handleMessage(raw) {
 
   switch (type) {
     case 'connected': {
-      clientId = payload.clientId;
       el.onlineNumber.textContent = payload.onlineCount;
 
       const token = sessionStorage.getItem(RESUME_TOKEN_KEY);
 
-      // Nếu đang ở phòng 1-1 người thật và còn token, thử resume
+      // Nếu đang ở phòng 1-1 người thật và còn token, thử resume trước khi ghi đè clientId
       if (
         currentScreen === 'chat' &&
         !isGroupMode &&
@@ -929,12 +933,16 @@ function handleMessage(raw) {
         token &&
         /^[0-9a-f]{64}$/.test(token)
       ) {
+        pendingTempClientId = payload.clientId;
         resumePending = true;
 
         console.log('[Resume] Đang yêu cầu khôi phục phòng...');
         send('resume_session', { token });
         break;
       }
+
+      clientId = payload.clientId;
+      pendingTempClientId = null;
 
       // Không có phiên 1-1 để khôi phục:
       resumePending = false;
@@ -977,8 +985,9 @@ function handleMessage(raw) {
     
     case 'resume_success': {
       resumePending = false;
+      pendingTempClientId = null;
 
-      // Khôi phục clientId gốc để Caro nhận diện đúng X/O
+      // Khôi phục clientId gốc để Caro & Minigame nhúng nhận diện đúng người chơi
       clientId = payload.clientId;
 
       console.log('[Resume] Khôi phục phòng thành công');
@@ -1020,6 +1029,10 @@ function handleMessage(raw) {
 
     case 'resume_failed': {
       resumePending = false;
+      if (pendingTempClientId) {
+        clientId = pendingTempClientId;
+        pendingTempClientId = null;
+      }
 
       // Không giữ token đã thất bại
       sessionStorage.removeItem(RESUME_TOKEN_KEY);
@@ -1184,6 +1197,27 @@ function handleMessage(raw) {
           exitGameRoomUiToLogin();
         }
       } else {
+        // Nếu server từ chối thao tác game (hoặc lỗi Redis/thiết bị), hoàn tác lựa chọn cục bộ chưa được ghi nhận
+        if ([
+          'GAME_ROOM_ACTION_ERROR',
+          'CHAT_GAME_ACTION_ERROR',
+          'GAME_PROCESSING_FAILED',
+          'REDIS_UNAVAILABLE',
+          'DEVICE_ID_REQUIRED',
+        ].includes(payload.code)) {
+          const activeRoom = getActiveArenaRoom();
+          const gs = activeRoom && activeRoom.gameState;
+          if (gs && gs.gameType === 'quiz_race' && gs.phase === 'question' && !(gs.answeredIds || []).includes(clientId)) {
+            myQuizSelection = null;
+            renderMultiGameArenaBody();
+          } else if (gs && gs.gameType === 'mind_duel' && gs.phase === 'choose' && !(gs.lockedIds || []).includes(clientId)) {
+            myMindDuelChoice = null;
+            renderMultiGameArenaBody();
+          } else if (gs && gs.gameType === 'undercover' && gs.phase === 'vote' && !(gs.votedIds || []).includes(clientId)) {
+            myUndercoverVote = null;
+            renderMultiGameArenaBody();
+          }
+        }
         showToast(payload.message, 'error');
       }
       break;
@@ -1557,7 +1591,7 @@ function handleMatchFound(payload) {
 
   // Thêm thông báo hệ thống
   if (isCurrentPartnerBot) {
-    addSystemMessage('✨ Bạn đang trò chuyện cùng Lumi. Cứ thoải mái tâm sự hoặc bấm "🎮 Chơi Game" (Đố vui, Nối từ, Đặt bom số, Caro) cùng Lumi nhé!');
+    addSystemMessage('✨ Bạn đang trò chuyện cùng Lumi. Cứ thoải mái tâm sự hoặc bấm "🎮 Chơi Game" (Đố vui, Nối từ, Đấu trí tâm lý, Caro) cùng Lumi nhé!');
   } else if (payload.keptPair && payload.keptPair.isKept) {
     addSystemMessage(`💛 Đã kết nối lại với ${payload.partnerNickname}! Mã hẹn gặp lại của hai bạn: ${payload.keptPair.pairCode} (40 tin nhắn gần nhất luôn được lưu giữ).`);
   } else {
@@ -1687,7 +1721,7 @@ function handleGameState(payload) {
     return;
   }
 
-  // 1. Nhận lời mời chơi game (Caro hoặc Đố Vui / Nối Từ / Đặt Bom Số)
+  // 1. Nhận lời mời chơi game (Caro hoặc Đố Vui / Nối Từ / Đấu Trí Tâm Lý)
   if (payload.action === 'invite') {
     if (el.modalGameInvite) {
       invitedGameType = payload.gameType || 'caro';
@@ -3136,7 +3170,7 @@ if (el.modalPartnerInfo) {
   }
 }
 
-// ── Minigame (Caro + Đố Vui + Nối Từ + Bom Số + Gián Điệp ngay trong Chat 1-1 / Lumi / Nhóm) ──
+// ── Minigame (Caro + Đố Vui + Nối Từ + Đấu Trí Tâm Lý + Gián Điệp ngay trong Chat 1-1 / Lumi / Nhóm) ──
 
 if (el.btnMinigame) {
   el.btnMinigame.addEventListener('click', () => {
@@ -5490,7 +5524,7 @@ if (el.btnCloseMentionPopover) {
 
 // ═══════════════════════════════════════════════════
 // TÍNH NĂNG 6: PHÒNG GAME NHIỀU NGƯỜI ẨN DANH (2–10 NGƯỜI)
-// Đố Vui Tốc Độ • Nối Từ • Ai Là Gián Điệp • Đặt Bom Số • Caro Khán Đài
+// Đố Vui Tốc Độ • Nối Từ • Ai Là Gián Điệp • Đấu Trí Tâm Lý • Caro Khán Đài
 // ═══════════════════════════════════════════════════
 
 function openGameHub(initialTab = 'play') {
@@ -5556,6 +5590,10 @@ function exitGameRoomUiToLogin() {
   gameRoomPlayers = [];
   myPrivateGameSecret = null;
   myQuizSelection = null;
+  myQuizQuestionToken = null;
+  myMindDuelChoice = null;
+  myMindDuelStake = 20;
+  myMindDuelRoundToken = null;
   myUndercoverVote = null;
   stopMultiGameCountdown();
   clearAllGroupTypers();
@@ -5592,6 +5630,10 @@ function handleGameRoomJoined(payload) {
   myPrivateGameSecret = null;
   secretWordHidden = false;
   myQuizSelection = null;
+  myQuizQuestionToken = null;
+  myMindDuelChoice = null;
+  myMindDuelStake = 20;
+  myMindDuelRoundToken = null;
   myUndercoverVote = null;
   clearAllGroupTypers();
 
@@ -5687,12 +5729,42 @@ function handleGameRoomState(payload) {
     currentGameRoom.playerCount = payload.players.length;
   }
   if (payload.gameState) {
-    // Reset lựa chọn cá nhân khi sang câu hỏi hoặc vòng mới
-    if (
-      payload.gameState.gameType === 'quiz_race'
-      && (!prevState || prevState.currentIndex !== payload.gameState.currentIndex || prevState.phase !== payload.gameState.phase)
-    ) {
-      if (payload.gameState.phase === 'question') myQuizSelection = null;
+    // Reset lựa chọn cá nhân khi sang câu hỏi hoặc ván/vòng mới
+    if (payload.gameState.gameType === 'quiz_race') {
+      const nextToken = payload.gameState.questionToken || `${payload.roomId}:${payload.gameState.currentIndex}`;
+      if (
+        payload.gameState.phase === 'question'
+        && (
+          nextToken !== myQuizQuestionToken
+          || !prevState
+          || prevState.currentIndex !== payload.gameState.currentIndex
+          || prevState.phase !== payload.gameState.phase
+        )
+      ) {
+        myQuizSelection = null;
+        myQuizQuestionToken = nextToken;
+      } else if (payload.gameState.phase === 'lobby' || payload.gameState.phase === 'ended') {
+        myQuizSelection = null;
+        myQuizQuestionToken = null;
+      }
+    }
+    if (payload.gameState.gameType === 'mind_duel') {
+      const nextMdToken = payload.gameState.roundToken || `${payload.roomId}:${payload.gameState.round}`;
+      if (
+        payload.gameState.phase === 'choose'
+        && (
+          nextMdToken !== myMindDuelRoundToken
+          || !prevState
+          || prevState.round !== payload.gameState.round
+          || prevState.phase !== payload.gameState.phase
+        )
+      ) {
+        myMindDuelChoice = null;
+        myMindDuelRoundToken = nextMdToken;
+      } else if (payload.gameState.phase === 'lobby' || payload.gameState.phase === 'ended') {
+        myMindDuelChoice = null;
+        myMindDuelRoundToken = null;
+      }
     }
     if (
       payload.gameState.gameType === 'undercover'
@@ -5768,6 +5840,7 @@ function resetEmbeddedGameUi() {
   if (!isGameRoomMode) {
     myPrivateGameSecret = null;
     myQuizSelection = null;
+    myQuizQuestionToken = null;
     myUndercoverVote = null;
     stopMultiGameCountdown();
     if (el.multiGamePanel) el.multiGamePanel.classList.add('hidden');
@@ -5860,11 +5933,41 @@ function handleChatGameState(payload) {
   embeddedGamePlayers = Array.isArray(payload.players) ? payload.players : [];
 
   if (payload.gameState) {
-    if (
-      payload.gameState.gameType === 'quiz_race'
-      && (!prevState || prevState.currentIndex !== payload.gameState.currentIndex || prevState.phase !== payload.gameState.phase)
-    ) {
-      if (payload.gameState.phase === 'question') myQuizSelection = null;
+    if (payload.gameState.gameType === 'quiz_race') {
+      const nextToken = payload.gameState.questionToken || `${payload.roomId}:${payload.gameState.currentIndex}`;
+      if (
+        payload.gameState.phase === 'question'
+        && (
+          nextToken !== myQuizQuestionToken
+          || !prevState
+          || prevState.currentIndex !== payload.gameState.currentIndex
+          || prevState.phase !== payload.gameState.phase
+        )
+      ) {
+        myQuizSelection = null;
+        myQuizQuestionToken = nextToken;
+      } else if (payload.gameState.phase === 'lobby' || payload.gameState.phase === 'ended') {
+        myQuizSelection = null;
+        myQuizQuestionToken = null;
+      }
+    }
+    if (payload.gameState.gameType === 'mind_duel') {
+      const nextMdToken = payload.gameState.roundToken || `${payload.roomId}:${payload.gameState.round}`;
+      if (
+        payload.gameState.phase === 'choose'
+        && (
+          nextMdToken !== myMindDuelRoundToken
+          || !prevState
+          || prevState.round !== payload.gameState.round
+          || prevState.phase !== payload.gameState.phase
+        )
+      ) {
+        myMindDuelChoice = null;
+        myMindDuelRoundToken = nextMdToken;
+      } else if (payload.gameState.phase === 'lobby' || payload.gameState.phase === 'ended') {
+        myMindDuelChoice = null;
+        myMindDuelRoundToken = null;
+      }
     }
     if (
       payload.gameState.gameType === 'undercover'
@@ -5997,7 +6100,7 @@ function renderGameRoomPlayersStrip() {
   const canMentionInChat = isGameRoomMode || isGroupMode;
 
   el.multiGamePlayersStrip.textContent = '';
-  const sorted = [...arenaPlayers].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const sorted = [...arenaPlayers].sort((a, b) => ((b.score || 0) - (a.score || 0)) || ((a.joinedAt || 0) - (b.joinedAt || 0)));
 
   sorted.forEach((p) => {
     const isMe = p.clientId === clientId;
@@ -6135,17 +6238,24 @@ function renderMultiGameArenaBody() {
     grid.className = 'quiz-options-grid';
     const letters = ['A', 'B', 'C', 'D'];
     const alreadyAnswered = (gs.answeredIds || []).includes(clientId);
+    const myRoundResult = gs.phase === 'reveal' && Array.isArray(gs.roundResults)
+      ? gs.roundResults.find((r) => r.clientId === clientId)
+      : null;
+    const effectiveSelection = gs.phase === 'reveal'
+      ? (myRoundResult ? myRoundResult.optionIndex : null)
+      : myQuizSelection;
+    const hasLockedChoice = alreadyAnswered || myQuizSelection !== null;
 
     ((gs.question && gs.question.options) || []).forEach((optText, idx) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'quiz-option-btn';
-      if (myQuizSelection === idx) btn.classList.add('selected');
+      if (effectiveSelection === idx) btn.classList.add('selected');
       if (gs.phase === 'reveal') {
         if (idx === gs.correctIndex) btn.classList.add('correct');
-        else if (myQuizSelection === idx) btn.classList.add('wrong');
+        else if (effectiveSelection === idx) btn.classList.add('wrong');
       }
-      btn.disabled = !isSeated || gs.phase !== 'question' || alreadyAnswered;
+      btn.disabled = !isSeated || gs.phase !== 'question' || hasLockedChoice;
 
       const letter = document.createElement('span');
       letter.className = 'quiz-opt-letter';
@@ -6157,6 +6267,7 @@ function renderMultiGameArenaBody() {
       btn.appendChild(letter);
       btn.appendChild(label);
       btn.addEventListener('click', () => {
+        if (!isSeated || gs.phase !== 'question' || alreadyAnswered || myQuizSelection !== null) return;
         myQuizSelection = idx;
         sendActiveArenaAction({ action: 'answer', optionIndex: idx });
         playGameClickSound();
@@ -6170,9 +6281,30 @@ function renderMultiGameArenaBody() {
       const resBox = document.createElement('div');
       resBox.className = 'arena-status-banner';
       const winners = gs.roundResults.filter((r) => r.isCorrect);
-      resBox.textContent = winners.length > 0
-        ? `🎉 Trả lời đúng: ${winners.map((w) => `${w.nickname} (+${w.gained}đ)`).join(', ')}`
-        : '😅 Chưa ai chọn đúng câu này! Chuẩn bị câu tiếp theo…';
+      const formatWinner = (w) => {
+        const who = `${w.nickname}${w.clientId === clientId ? ' (Bạn)' : ''}`;
+        const extras = [];
+        if (typeof w.elapsedMs === 'number') extras.push(`${(w.elapsedMs / 1000).toFixed(1)}s`);
+        if (w.isFastest) extras.push('⚡Nhanh nhất');
+        if (w.streakBonus > 0 && w.streak >= 2) extras.push(`🔥x${w.streak}`);
+        const detail = extras.length > 0 ? ` [${extras.join(' • ')}]` : '';
+        return `${who} (+${w.gained}đ${detail})`;
+      };
+
+      const parts = [];
+      if (winners.length > 0) {
+        parts.push(`🎉 Trả lời đúng: ${winners.map(formatWinner).join(', ')}`);
+      } else {
+        parts.push('😅 Chưa ai chọn đúng câu này! Chuẩn bị câu tiếp theo…');
+      }
+      if (myRoundResult && !myRoundResult.isCorrect) {
+        parts.push(
+          myRoundResult.optionIndex === null
+            ? '⏰ Bạn chưa kịp chốt đáp án câu này (+0đ)'
+            : '❌ Bạn chọn sai đáp án (+0đ)'
+        );
+      }
+      resBox.textContent = parts.join(' • ');
       el.multiGameArenaBody.appendChild(resBox);
     }
     return;
@@ -6428,109 +6560,187 @@ function renderMultiGameArenaBody() {
     return;
   }
 
-  // ── GAME 4: 💣 Đặt Bom Số ─────────────────────────────────
-  if (gs.gameType === 'number_bomb') {
+  // ── GAME 4: 🃏 Đấu Trí Tâm Lý (Cược Điểm & Lật Bài) ───────
+  if (gs.gameType === 'mind_duel') {
     if (gs.phase === 'ended') {
       const banner = document.createElement('div');
       banner.className = 'arena-status-banner my-turn';
-      banner.textContent = `🏆 Người sống sót cuối cùng: ${gs.winnerName || 'Hòa'}!`;
+      banner.textContent = `🏆 Bậc thầy Đấu Trí Tâm Lý: ${gs.winnerName || 'Hòa'}!`;
       el.multiGameArenaBody.appendChild(banner);
       el.multiGameArenaBody.appendChild(renderPodiumBlock(gs.podium || []));
       return;
     }
 
-    const isMyTurn = gs.phase === 'playing' && gs.turnClientId === clientId;
-    const minVal = (gs.minBound ?? 0) + 1;
-    const maxVal = (gs.maxBound ?? 101) - 1;
+    const MIND_DUEL_CARDS_UI = [
+      { id: 'attack', icon: '⚔️', name: 'Tấn Công', desc: 'Phá Lừa Đòn & cướp Tích Lũy • Thua Lá Chắn' },
+      { id: 'shield', icon: '🛡️', name: 'Lá Chắn', desc: 'Phản đòn Tấn Công • Bị Lừa Đòn xuyên khiên' },
+      { id: 'bluff', icon: '🎭', name: 'Lừa Đòn', desc: 'Xuyên thủng Lá Chắn • Thua Tấn Công' },
+      { id: 'charge', icon: '💰', name: 'Tích Lũy', desc: 'Gom thưởng lớn nếu né được Tấn Công' },
+    ];
 
-    const banner = document.createElement('div');
-    banner.className = `arena-status-banner${gs.phase === 'boom' ? ' boom' : (isMyTurn ? ' my-turn' : '')}`;
-    if (gs.phase === 'boom' && gs.lastBoom) {
-      banner.textContent = `💥 BÙM! ${gs.lastBoom.victimNickname} dính bom số ${gs.lastBoom.bombNumber}! Đang nạp quả bom mới…`;
-    } else if (isMyTurn) {
-      banner.textContent = `👉 ĐẾN LƯỢT BẠN! Chọn 1 số an toàn từ ${minVal} đến ${maxVal}`;
+    const isDouble = Boolean(gs.isDoubleRound);
+    const lockedIds = gs.lockedIds || [];
+    const serverLockedMe = lockedIds.includes(clientId);
+    const hasLocked = serverLockedMe || Boolean(myMindDuelChoice);
+
+    const headerBanner = document.createElement('div');
+    headerBanner.className = `arena-status-banner${isDouble ? ' mind-duel-double' : (gs.phase === 'choose' && isSeated && !hasLocked ? ' my-turn' : '')}`;
+    if (gs.phase === 'choose') {
+      const roundLabel = isDouble
+        ? `🔥 VÒNG CUỐI ${gs.round}/${gs.totalRounds || 6} (x2 ĐIỂM!)`
+        : `🃏 VÒNG ${gs.round || 1}/${gs.totalRounds || 6}`;
+      const progressText = `Đã chốt bài: ${gs.lockedCount || 0}/${arenaRoom.playerCount}`;
+      headerBanner.textContent = hasLocked
+        ? `${roundLabel} • ✅ Bạn đã khóa bài! Đang chờ đối thủ (${progressText})…`
+        : `${roundLabel} • ${isSeated ? 'Chọn mức cược & úp 1 lá bài chiến thuật!' : 'Đang theo dõi ván đấu'} (${progressText})`;
     } else {
-      banner.textContent = `⏳ Đang chờ ${gs.turnNickname || 'người chơi'} chọn số (${minVal} – ${maxVal})…`;
+      headerBanner.textContent = gs.roundSummary || `🃏 Mở bài vòng ${gs.round || 1}!`;
     }
-    el.multiGameArenaBody.appendChild(banner);
+    el.multiGameArenaBody.appendChild(headerBanner);
 
-    const rangeBox = document.createElement('div');
-    rangeBox.className = 'bomb-range-display';
-    const lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size: 0.74rem; font-weight: 700; color: var(--text-muted);';
-    lbl.textContent = `VÒNG ${gs.round || 1} • KHOẢNG AN TOÀN HIỆN TẠI`;
+    const ruleHint = document.createElement('div');
+    ruleHint.className = 'mind-duel-rule-bar';
+    ruleHint.textContent = '⚔️ > 🎭 & 💰  •  🛡️ > ⚔️  •  🎭 > 🛡️  •  💰 né ⚔️ gom thưởng lớn';
+    el.multiGameArenaBody.appendChild(ruleHint);
 
-    const bigRange = document.createElement('div');
-    bigRange.className = 'bomb-range-numbers';
-    bigRange.textContent = `${minVal}  ⋯  ${maxVal}`;
+    if (gs.phase === 'choose') {
+      // Hàng chọn mức cược (10 / 20 / 30 điểm)
+      const stakeBar = document.createElement('div');
+      stakeBar.className = 'mind-duel-stake-row';
 
-    rangeBox.appendChild(lbl);
-    rangeBox.appendChild(bigRange);
+      const stakeLabel = document.createElement('span');
+      stakeLabel.className = 'mind-duel-stake-label';
+      stakeLabel.textContent = isDouble ? 'Mức cược (×2):' : 'Mức cược:';
+      stakeBar.appendChild(stakeLabel);
 
-    if (isMyTurn) {
-      const form = document.createElement('form');
-      form.className = 'arena-inline-form';
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.min = String(minVal);
-      input.max = String(maxVal);
-      input.className = 'emoji-search-input';
-      input.placeholder = `Nhập số (${minVal} - ${maxVal})…`;
-
-      const btn = document.createElement('button');
-      btn.type = 'submit';
-      btn.className = 'btn btn-primary btn-small';
-      btn.textContent = '💣 Chốt số!';
-
-      form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const num = parseInt(input.value, 10);
-        if (isNaN(num) || num < minVal || num > maxVal) {
-          showToast(`Vui lòng chọn số nguyên từ ${minVal} đến ${maxVal}!`, 'warning');
-          return;
-        }
-        sendActiveArenaAction({ action: 'guess_number', number: num });
-        playGameClickSound();
-      });
-      form.appendChild(input);
-      form.appendChild(btn);
-      rangeBox.appendChild(form);
-
-      // Các nút chọn nhanh tiện lợi
-      const quickRow = document.createElement('div');
-      quickRow.className = 'bomb-quick-picks';
-      const picks = [...new Set([
-        minVal,
-        Math.floor((minVal + maxVal) / 2),
-        maxVal,
-      ])].filter((n) => n >= minVal && n <= maxVal);
-      picks.forEach((n) => {
-        const qBtn = document.createElement('button');
-        qBtn.type = 'button';
-        qBtn.className = 'topic-preset-chip';
-        qBtn.textContent = `Chọn nhanh ${n}`;
-        qBtn.addEventListener('click', () => {
-          sendActiveArenaAction({ action: 'guess_number', number: n });
+      const activeStake = (myMindDuelChoice && myMindDuelChoice.stake) || myMindDuelStake || 20;
+      const stakeOptions = [
+        { val: 10, label: '🪙 10đ' },
+        { val: 20, label: '🔥 20đ' },
+        { val: 30, label: '💎 30đ' },
+      ];
+      stakeOptions.forEach((opt) => {
+        const sBtn = document.createElement('button');
+        sBtn.type = 'button';
+        sBtn.className = `mind-duel-stake-chip${activeStake === opt.val ? ' active' : ''}`;
+        sBtn.textContent = isDouble ? `${opt.label} (×2)` : opt.label;
+        sBtn.disabled = !isSeated || hasLocked;
+        sBtn.addEventListener('click', () => {
+          if (!isSeated || hasLocked) return;
+          myMindDuelStake = opt.val;
           playGameClickSound();
+          renderMultiGameArenaBody();
         });
-        quickRow.appendChild(qBtn);
+        stakeBar.appendChild(sBtn);
       });
-      rangeBox.appendChild(quickRow);
-      setTimeout(() => input.focus(), 40);
+      el.multiGameArenaBody.appendChild(stakeBar);
+
+      // Lưới 4 lá bài chiến thuật úp kín
+      const cardsGrid = document.createElement('div');
+      cardsGrid.className = 'mind-duel-cards-grid';
+
+      MIND_DUEL_CARDS_UI.forEach((c) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isPicked = myMindDuelChoice && myMindDuelChoice.card === c.id;
+        btn.className = `mind-duel-card card-${c.id}${isPicked ? ' selected' : ''}`;
+        btn.disabled = !isSeated || hasLocked;
+
+        const top = document.createElement('div');
+        top.className = 'mind-duel-card-top';
+        const icon = document.createElement('span');
+        icon.className = 'mind-duel-card-icon';
+        icon.textContent = c.icon;
+        const title = document.createElement('strong');
+        title.textContent = c.name;
+        top.appendChild(icon);
+        top.appendChild(title);
+
+        const desc = document.createElement('div');
+        desc.className = 'mind-duel-card-desc';
+        desc.textContent = c.desc;
+
+        btn.appendChild(top);
+        btn.appendChild(desc);
+
+        if (isPicked) {
+          const badge = document.createElement('span');
+          badge.className = 'mind-duel-locked-tag';
+          badge.textContent = `🔒 Đã chốt (${myMindDuelChoice.stake}đ)`;
+          btn.appendChild(badge);
+        }
+
+        btn.addEventListener('click', () => {
+          if (!isSeated || hasLocked) return;
+          const stake = myMindDuelStake || 20;
+          myMindDuelChoice = { card: c.id, stake };
+          sendActiveArenaAction({ action: 'pick_card', card: c.id, stake });
+          playGameClickSound();
+          renderMultiGameArenaBody();
+        });
+        cardsGrid.appendChild(btn);
+      });
+      el.multiGameArenaBody.appendChild(cardsGrid);
     }
 
-    el.multiGameArenaBody.appendChild(rangeBox);
+    if (gs.phase === 'reveal' && Array.isArray(gs.roundResults)) {
+      const revealGrid = document.createElement('div');
+      revealGrid.className = 'mind-duel-reveal-grid';
 
-    if (Array.isArray(gs.history) && gs.history.length > 0) {
-      const trail = document.createElement('div');
-      trail.className = 'word-chain-trail';
-      gs.history.forEach((h) => {
-        const chip = document.createElement('span');
-        chip.className = 'word-chain-chip';
-        chip.textContent = `${h.boom ? '💥' : '✅'} ${h.number} (${h.nickname})`;
-        trail.appendChild(chip);
+      gs.roundResults.forEach((r) => {
+        const isMe = r.clientId === clientId;
+        const cardEl = document.createElement('div');
+        cardEl.className = `mind-duel-reveal-card${isMe ? ' is-me' : ''}${r.delta > 0 ? ' win' : (r.delta < 0 ? ' lose' : '')}`;
+
+        const head = document.createElement('div');
+        head.className = 'mind-duel-reveal-head';
+        const who = document.createElement('span');
+        who.textContent = `${r.avatar || '🦊'} ${r.nickname}${isMe ? ' (Bạn)' : ''}`;
+        const deltaBadge = document.createElement('span');
+        deltaBadge.className = `mind-duel-delta ${r.delta > 0 ? 'pos' : (r.delta < 0 ? 'neg' : 'flat')}`;
+        deltaBadge.textContent = r.delta > 0 ? `+${r.delta}đ` : `${r.delta}đ`;
+        head.appendChild(who);
+        head.appendChild(deltaBadge);
+
+        const playRow = document.createElement('div');
+        playRow.className = 'mind-duel-reveal-play';
+        playRow.textContent = `${r.cardIcon || '🃏'} ${r.cardName}${r.stake ? ` • Cược ${r.stake}đ` : ''}`;
+
+        const outcome = document.createElement('div');
+        outcome.className = 'mind-duel-reveal-outcome';
+        outcome.textContent = `${r.outcomeLabel} • Tổng: ${r.scoreAfter}đ`;
+
+        cardEl.appendChild(head);
+        cardEl.appendChild(playRow);
+        cardEl.appendChild(outcome);
+        revealGrid.appendChild(cardEl);
       });
-      el.multiGameArenaBody.appendChild(trail);
+      el.multiGameArenaBody.appendChild(revealGrid);
+    }
+
+    // Lịch sử các vòng trước để người chơi đọc vị thói quen đối thủ
+    if (Array.isArray(gs.history) && gs.history.length > 0) {
+      const histWrap = document.createElement('div');
+      histWrap.className = 'mind-duel-history';
+      gs.history.slice(-4).forEach((h) => {
+        const row = document.createElement('div');
+        row.className = 'mind-duel-history-row';
+        const tag = document.createElement('span');
+        tag.className = 'mind-duel-history-round';
+        tag.textContent = `V${h.round}${h.multiplier > 1 ? '×2' : ''}`;
+        row.appendChild(tag);
+
+        const summary = document.createElement('span');
+        summary.className = 'mind-duel-history-entries';
+        summary.textContent = (h.entries || []).map((e) => {
+          const name = e.clientId === clientId ? 'Bạn' : e.nickname;
+          const d = e.delta > 0 ? `+${e.delta}` : `${e.delta}`;
+          return `${name}: ${e.cardIcon}${e.stake || 0} (${d})`;
+        }).join('  |  ');
+        row.appendChild(summary);
+        histWrap.appendChild(row);
+      });
+      el.multiGameArenaBody.appendChild(histWrap);
     }
     return;
   }

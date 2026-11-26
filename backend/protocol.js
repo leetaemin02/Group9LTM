@@ -48,7 +48,7 @@ const VALID_MULTIPLAYER_GAMES = Object.freeze([
   'quiz_race',
   'word_chain',
   'undercover',
-  'number_bomb',
+  'mind_duel',
   'caro_arena',
 ]);
 
@@ -498,7 +498,7 @@ function validatePayload(type, payload) {
       }
       if (payload.gameType !== undefined) {
         const rawType = typeof payload.gameType === 'string' ? payload.gameType.trim().toLowerCase() : '';
-        const allowed1v1 = ['caro', 'quiz_race', 'word_chain', 'number_bomb'];
+        const allowed1v1 = ['caro', 'quiz_race', 'word_chain', 'mind_duel'];
         if (!allowed1v1.includes(rawType)) {
           return { ok: false, error: 'Trò chơi 1-1 không hợp lệ' };
         }
@@ -829,7 +829,7 @@ function validatePayload(type, payload) {
     case CLIENT_TYPES.CHAT_GAME_ACTION: {
       const allowedActions = [
         'answer', 'submit_word', 'submit_clue', 'vote',
-        'guess_number', 'caro_move', 'play_again', 'back_to_lobby',
+        'pick_card', 'caro_move', 'play_again', 'back_to_lobby',
       ];
       if (typeof payload.action !== 'string' || !allowedActions.includes(payload.action)) {
         return { ok: false, error: 'Thao tác game không hợp lệ' };
@@ -856,12 +856,17 @@ function validatePayload(type, payload) {
           return { ok: false, error: 'Người chơi được bỏ phiếu không hợp lệ' };
         }
         sanitized.targetClientId = payload.targetClientId.trim();
-      } else if (payload.action === 'guess_number') {
-        const num = Number(payload.number);
-        if (!Number.isInteger(num) || num < 1 || num > 100) {
-          return { ok: false, error: 'Số chọn phải là số nguyên từ 1 đến 100' };
+      } else if (payload.action === 'pick_card') {
+        const card = typeof payload.card === 'string' ? payload.card.trim().toLowerCase() : '';
+        if (!['attack', 'shield', 'bluff', 'charge'].includes(card)) {
+          return { ok: false, error: 'Lá bài chiến thuật không hợp lệ' };
         }
-        sanitized.number = num;
+        const stake = payload.stake === undefined ? 20 : Number(payload.stake);
+        if (![10, 20, 30].includes(stake)) {
+          return { ok: false, error: 'Mức cược phải là 10, 20 hoặc 30 điểm' };
+        }
+        sanitized.card = card;
+        sanitized.stake = stake;
       } else if (payload.action === 'caro_move') {
         if (!Number.isInteger(payload.index) || payload.index < 0 || payload.index >= 400) {
           return { ok: false, error: 'Ô cờ không hợp lệ' };
