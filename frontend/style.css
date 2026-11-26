@@ -5162,13 +5162,13 @@ body {
 
 .multi-game-timer {
   font-family: var(--font-mono);
-  font-size: 0.76rem;
+  font-size: 0.92rem;
   font-weight: 800;
-  padding: 3px 10px;
+  padding: 4px 12px;
   border-radius: var(--radius-pill);
   background: var(--warning-bg);
   color: var(--warning);
-  border: 1px solid var(--warning-border);
+  border: 1.5px solid var(--warning-border);
 }
 
 .multi-game-timer.urgent {
@@ -5176,6 +5176,129 @@ body {
   color: var(--danger);
   border-color: var(--danger-border);
   animation: pulseDot 0.75s infinite;
+}
+
+/* Thanh đếm ngược thời gian nổi bật trong Đấu trường Game */
+.multi-game-countdown-bar {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.14), rgba(56, 189, 248, 0.08));
+  border: 1.5px solid var(--warning-border);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.multi-game-countdown-bar.is-intermission {
+  background: var(--bg-panel-inner);
+  border-color: var(--border-medium);
+  box-shadow: none;
+}
+
+.multi-game-countdown-bar.is-urgent {
+  z-index: 2;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.24), rgba(249, 115, 22, 0.2));
+  border-color: var(--danger);
+  transform: scale(1.018);
+  animation: countdownUrgentGlow 0.75s ease-in-out infinite alternate;
+}
+
+.countdown-bar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.countdown-bar-label {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.multi-game-countdown-bar.is-urgent .countdown-bar-label {
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.countdown-bar-value {
+  font-family: var(--font-mono);
+  font-size: 1.32rem;
+  font-weight: 800;
+  line-height: 1;
+  min-width: 54px;
+  text-align: center;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-solid);
+  color: var(--warning);
+  border: 1.5px solid var(--warning-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: font-size 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.multi-game-countdown-bar.is-intermission .countdown-bar-value {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  border-color: var(--border-medium);
+}
+
+.multi-game-countdown-bar.is-urgent .countdown-bar-value {
+  font-size: 1.55rem;
+  background: var(--danger);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.55);
+}
+
+.countdown-bar-value.tick-pop {
+  animation: countdownTickPop 0.34s cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+
+.countdown-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.countdown-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--accent-primary), var(--warning));
+  transition: width 0.1s linear;
+}
+
+.multi-game-countdown-bar.is-intermission .countdown-progress-fill {
+  background: linear-gradient(90deg, var(--accent-secondary, #38bdf8), var(--accent-primary));
+}
+
+.multi-game-countdown-bar.is-urgent .countdown-progress-fill {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+@keyframes countdownUrgentGlow {
+  0% {
+    box-shadow: 0 4px 14px rgba(239, 68, 68, 0.28);
+  }
+  100% {
+    box-shadow: 0 6px 24px rgba(239, 68, 68, 0.55);
+  }
+}
+
+@keyframes countdownTickPop {
+  0% {
+    transform: scale(1.26);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .multi-game-top-actions {
@@ -5308,6 +5431,80 @@ body {
   color: var(--text-secondary);
   line-height: 1.5;
   max-width: 460px;
+}
+
+.arena-room-code-card {
+  width: min(320px, 100%);
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: auto minmax(96px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border: 1.5px solid var(--accent-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card-solid);
+  color: var(--text-primary);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+  transition: transform var(--duration-fast) ease, border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.arena-room-code-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent-hover);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.18);
+}
+
+.arena-room-code-card:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.arena-room-code-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.arena-room-code-value {
+  font-family: var(--font-mono);
+  font-size: 1.18rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--accent-primary);
+  user-select: all;
+}
+
+.arena-room-code-copy {
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 7px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-primary);
+}
+
+@media (max-width: 520px) {
+  .arena-room-code-card {
+    grid-template-columns: 1fr auto;
+  }
+
+  .arena-room-code-label {
+    grid-column: 1;
+  }
+
+  .arena-room-code-value {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .arena-room-code-copy {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
 }
 
 .arena-status-banner {

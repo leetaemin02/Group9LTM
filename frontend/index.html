@@ -13,7 +13,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=20261126-4" />
+  <link rel="stylesheet" href="style.css?v=20261126-6" />
 </head>
 
 <body>
@@ -805,6 +805,17 @@
           <!-- Thanh Bảng điểm & Người chơi (bấm để @tag hoặc xem thứ hạng) -->
           <div id="multi-game-players-strip" class="multi-game-players-strip" aria-label="Danh sách người chơi"></div>
 
+          <!-- Thanh Đếm Ngược Thời Gian nổi bật (luôn hiện khi đang chơi, hiệu ứng cảnh báo 5 giây cuối) -->
+          <div id="multi-game-countdown-bar" class="multi-game-countdown-bar hidden" role="timer" aria-live="polite">
+            <div class="countdown-bar-head">
+              <span id="multi-game-countdown-label" class="countdown-bar-label">⏱️ Thời gian còn lại</span>
+              <span id="multi-game-countdown-value" class="countdown-bar-value">15s</span>
+            </div>
+            <div class="countdown-progress-track" aria-hidden="true">
+              <div id="multi-game-countdown-fill" class="countdown-progress-fill" style="width: 100%"></div>
+            </div>
+          </div>
+
           <!-- Khu vực nội dung tương tác của từng game -->
           <div id="multi-game-arena-body" class="multi-game-arena-body"></div>
         </aside>
@@ -1124,6 +1135,7 @@
                 <option value="8">8 người</option>
                 <option value="6">6 người</option>
                 <option value="4">4 người</option>
+                <option value="3">3 người</option>
                 <option value="2">2 người</option>
               </select>
             </label>
@@ -1251,7 +1263,7 @@
     <div id="toast-container" class="toast-container"></div>
   </div>
 
-  <script src="script.js?v=20261126-4"></script>
+  <script src="script.js?v=20261126-6"></script>
 </body>
 
 </html>
