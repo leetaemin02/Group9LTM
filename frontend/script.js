@@ -2372,7 +2372,19 @@ function appendAttachmentMessage(attachment, direction, timestamp) {
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.referrerPolicy = 'no-referrer';
-    link.textContent = `📎 ${attachment.fileName}`;
+    link.className = 'attachment-file-link';
+
+    const icon = document.createElement('span');
+    icon.className = 'attachment-file-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '📄';
+
+    const name = document.createElement('span');
+    name.className = 'attachment-file-name';
+    name.textContent = attachment.fileName;
+
+    link.appendChild(icon);
+    link.appendChild(name);
     card.appendChild(link);
   }
 
