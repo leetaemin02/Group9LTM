@@ -55,6 +55,7 @@
 
   /* Màu nhấn chính: Cam San Hô Hoàng Hôn (Warm Sunset Coral) */
   --accent-primary: #ff6b4a;
+  --accent: var(--accent-primary);
   --accent-primary-hover: #ff5530;
   --accent-secondary: #ffa260;
   --accent-primary-glow: rgba(255, 107, 74, 0.26);
@@ -126,6 +127,7 @@
   --text-inverse: #faf8f5;
 
   --accent-primary: #e04f30;
+  --accent: var(--accent-primary);
   --accent-primary-hover: #c93f22;
   --accent-secondary: #ea713b;
   --accent-primary-glow: rgba(224, 79, 48, 0.2);
@@ -761,6 +763,7 @@ body {
 .showcase-pillars {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
   gap: 10px;
 }
 
@@ -1033,8 +1036,9 @@ body {
 .mood-content {
   display: flex;
   align-items: center;
+  min-height: 44px;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -1264,9 +1268,14 @@ body {
 /* Hàng nút hành động ở Sảnh (2 nút nằm ngang gọn gàng) */
 .login-actions-row {
   display: grid;
-  grid-template-columns: 1.35fr 1fr;
+  grid-template-columns: 1.15fr 1fr;
   gap: 10px;
   margin-top: 18px;
+}
+
+.login-actions-row .btn-large {
+  min-height: 48px;
+  padding: 11px 16px;
 }
 
 .card-footer-note {
@@ -1710,7 +1719,15 @@ body {
   min-height: 34px;
   padding: 0 12px;
   font-size: 0.78rem;
+  line-height: 1;
   gap: 6px;
+}
+
+.chat-actions .action-icon {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .chat-actions .btn-icon-round {
@@ -4629,6 +4646,18 @@ body {
   align-items: center;
 }
 
+.group-browse-search-row .emoji-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+
+.group-browse-search-row .btn-small {
+  height: 38px;
+  min-height: 38px;
+  flex-shrink: 0;
+}
+
 .group-saved-info-bar {
   padding: 10px 13px;
   border-radius: var(--radius-lg);
@@ -4764,8 +4793,14 @@ body {
 .multiplayer-entry-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 9px;
   margin-top: 10px;
+}
+
+.multiplayer-entry-grid .btn-group-entry,
+.multiplayer-entry-grid .btn-game-entry {
+  height: 100%;
 }
 
 .btn-game-entry {
@@ -4948,6 +4983,10 @@ body {
   gap: 9px;
 }
 
+.game-catalog-grid .game-choice-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .game-choice-card {
   border: 1px solid var(--border-subtle);
   background: var(--bg-panel-inner);
@@ -5014,9 +5053,17 @@ body {
   align-items: center;
 }
 
+.game-create-options .emoji-search-input,
+.game-code-join-row .emoji-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+
 .game-max-select-wrap {
   display: inline-flex;
   align-items: center;
+  height: 38px;
   gap: 6px;
   font-size: 0.78rem;
   font-weight: 700;
@@ -5024,7 +5071,13 @@ body {
   background: var(--bg-panel-inner);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  padding: 6px 10px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+
+.game-code-join-row .btn-small {
+  height: 38px;
+  min-height: 38px;
   flex-shrink: 0;
 }
 
@@ -5624,6 +5677,23 @@ body {
 
 .pair-hub-modal {
   max-width: 580px;
+  gap: 12px;
+}
+
+.pair-hub-modal .group-hub-header {
+  margin-bottom: 0;
+}
+
+.pair-hub-modal .group-cards-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.pair-code-box .game-code-join-row {
+  padding-top: 0;
+  border-top: none;
 }
 
 .pair-code-box {

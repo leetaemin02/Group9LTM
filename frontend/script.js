@@ -1487,7 +1487,7 @@ function handleMatchFound(payload) {
     }
     el.commonInterests.textContent = 'Bạn ảo Lumi • Luôn ở đây khi bạn cần';
     if (el.btnSkip) {
-      el.btnSkip.innerHTML = '<span class="action-icon">👥</span> Tìm người thật <kbd class="kbd-hint">Esc</kbd>';
+      el.btnSkip.innerHTML = '<span class="action-icon">👥</span> <span class="action-label">Tìm người thật</span> <kbd class="kbd-hint">Esc</kbd>';
       el.btnSkip.title = 'Chuyển sang tìm bạn chat người thật (Phím tắt: Esc)';
     }
     if (el.btnReport) el.btnReport.classList.add('hidden');
@@ -1516,7 +1516,7 @@ function handleMatchFound(payload) {
     }
 
     if (el.btnSkip) {
-      el.btnSkip.innerHTML = '<span class="action-icon">⏭️</span> Bỏ qua <kbd class="kbd-hint">Esc</kbd>';
+      el.btnSkip.innerHTML = '<span class="action-icon">⏭️</span> <span class="action-label">Bỏ qua</span> <kbd class="kbd-hint">Esc</kbd>';
       el.btnSkip.title = 'Đổi sang người khác (Phím tắt: Esc)';
     }
     if (el.btnReport) el.btnReport.classList.remove('hidden');
